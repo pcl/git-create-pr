@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# TODO:
+# - error messages if config values are missing or in unknown formats
+# - check origin to see if there's an open PR for the branch already
+# - make sure HEAD doesn't differ from the remote branch
+# - escape json in title of PR
+
+set -eou pipefail
+
+if [ $# -ne 0 ]; then
+    echo "Usage: git create-pr"
+    exit -1
+fi
+
+function create_pr {
+    local remote="$1"
+    local branch="$2"
+
+    token=$(git config --get prtools.token)
+
+    origin_api_path=$(git config --get remote.origin.url | sed 's/.*:\(.*\).git/\1/')
+    remote_api_path=$(git config --get remote.$remote.url | sed 's/.*:\(.*\).git/\1/')
+    remote_user=$(echo $remote_api_path | sed 's,/.*,,')
+    remote_head="$remote_user:$branch"
+    remote_host=$(git config --get hub.host)
+    api_url="https://$remote_host/api/v3/repos/$origin_api_path/pulls"
+
+    title=$(git log -n 1 --format=format:%s)
+
+    set +e
+    response=$(curl -s -H "Authorization: token $token" "$api_url" -d "{ \
+        \"title\": \"$title\", \
+        \"head\": \"$remote_head\", \
+        \"base\": \"master\" \
+    }")
+    status=$?
+    set -e
+    if [ $? -ne 0 ]; then
+        echo "PR creation failed! Output: "
+        echo "$response"
+    fi
+
+    pr_number="$(extract_json "$response" "number")"
+    echo -n "PR $pr_number created! Open in a browser? [Y/n] "
+    read open_pr
+    if [ -z "$open_pr" ] || [ "$open_pr" == "Y" ] || [ "$open_pr" == "y" ]; then
+        pr_url="$(extract_json "$response" "html_url" | tr -d '"')"
+        open $pr_url
+    fi
+}
+
+function extract_json {
+    echo "$1" | grep "^  \"$2\": " | sed 's/.*: \(.*\),.*/\1/'
+}
+
+head_sha=$(git reflog -n 1 --format=format:%H)
+for remote in $(git remote | grep -v origin); do
+    candidate_sha=$(git ls-remote --heads $remote | grep "$head_sha")
+    if [ -n "$candidate_sha" ]; then
+        candidate_branch=$(echo "$candidate_sha" | awk '{print $2}' | sed 's,refs/heads/,,')
+        create_pr "$remote" "$candidate_branch"
+        break
+    fi
+done
