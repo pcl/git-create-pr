@@ -80,14 +80,21 @@ function main {
     fi
     set -e
 
+    local created=false
     for remote in $(git remote | grep -v origin); do
         local candidate_sha=$(git ls-remote --heads $remote | grep "$head_sha")
         if [ -n "$candidate_sha" ]; then
             local candidate_branch=$(echo "$candidate_sha" | awk '{print $2}' | sed 's,refs/heads/,,')
             create_pr "$remote" "$candidate_branch"
+            created=true
             break
         fi
     done
+
+    if ! $created; then
+        echo "No local changes found to create PRs for!"
+        exit -1
+    fi
 }
 
 main
