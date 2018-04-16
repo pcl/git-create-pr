@@ -4,7 +4,6 @@
 # - error messages if config values are missing or in unknown formats
 # - check origin to see if there's an open PR for the branch already
 # - make sure HEAD doesn't differ from the remote branch
-# - escape json in title of PR
 
 set -eou pipefail
 
@@ -26,7 +25,7 @@ function create_pr {
     remote_host=$(git config --get hub.host)
     api_url="https://$remote_host/api/v3/repos/$origin_api_path/pulls"
 
-    title=$(git log -n 1 --format=format:%s)
+    title=$(git log -n 1 --format=format:%s | sed 's/"/\\"/g')
 
     set +e
     response=$(curl -s -H "Authorization: token $token" "$api_url" -d "{ \
