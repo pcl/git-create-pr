@@ -1,10 +1,5 @@
 #!/bin/bash
 
-# TODO:
-# - error messages if config values are missing or in unknown formats
-# - check origin to see if there's an open PR for the branch already
-# - make sure HEAD doesn't differ from the remote branch
-
 set -eou pipefail
 
 if [ $# -ne 0 ]; then
@@ -12,39 +7,39 @@ if [ $# -ne 0 ]; then
     exit -1
 fi
 
+token=undefined
+
 function create_pr {
     local remote="$1"
     local branch="$2"
 
-    token=$(git config --get prtools.token)
+    local origin_api_path=$(git config --get remote.origin.url | sed 's/.*:\(.*\).git/\1/')
+    local remote_api_path=$(git config --get remote.$remote.url | sed 's/.*:\(.*\).git/\1/')
+    local remote_user=$(echo $remote_api_path | sed 's,/.*,,')
+    local remote_head="$remote_user:$branch"
+    local remote_host=$(git config --get hub.host)
+    local api_url="https://$remote_host/api/v3/repos/$origin_api_path/pulls"
 
-    origin_api_path=$(git config --get remote.origin.url | sed 's/.*:\(.*\).git/\1/')
-    remote_api_path=$(git config --get remote.$remote.url | sed 's/.*:\(.*\).git/\1/')
-    remote_user=$(echo $remote_api_path | sed 's,/.*,,')
-    remote_head="$remote_user:$branch"
-    remote_host=$(git config --get hub.host)
-    api_url="https://$remote_host/api/v3/repos/$origin_api_path/pulls"
-
-    title=$(git log -n 1 --format=format:%s | sed 's/"/\\"/g')
+    local title=$(git log -n 1 --format=format:%s | sed 's/"/\\"/g')
 
     set +e
-    response=$(curl -s -H "Authorization: token $token" "$api_url" -d "{ \
+    local response=$(curl -s -H "Authorization: token $token" "$api_url" -d "{ \
         \"title\": \"$title\", \
         \"head\": \"$remote_head\", \
         \"base\": \"master\" \
     }")
-    status=$?
+    local status=$?
     set -e
     if [ $? -ne 0 ]; then
         echo "PR creation failed! Output: "
         echo "$response"
     fi
 
-    pr_number="$(extract_json "$response" "number")"
+    local pr_number="$(extract_json "$response" "number")"
     echo -n "PR $pr_number created! Open in a browser? [Y/n] "
     read open_pr
     if [ -z "$open_pr" ] || [ "$open_pr" == "Y" ] || [ "$open_pr" == "y" ]; then
-        pr_url="$(extract_json "$response" "html_url" | tr -d '"')"
+        local pr_url="$(extract_json "$response" "html_url" | tr -d '"')"
         open $pr_url
     fi
 }
@@ -53,12 +48,46 @@ function extract_json {
     echo "$1" | grep "^  \"$2\": " | sed 's/.*: \(.*\),.*/\1/'
 }
 
-head_sha=$(git reflog -n 1 --format=format:%H)
-for remote in $(git remote | grep -v origin); do
-    candidate_sha=$(git ls-remote --heads $remote | grep "$head_sha")
-    if [ -n "$candidate_sha" ]; then
-        candidate_branch=$(echo "$candidate_sha" | awk '{print $2}' | sed 's,refs/heads/,,')
-        create_pr "$remote" "$candidate_branch"
-        break
+function main {
+    set +e
+    token=$(git config --get prtools.token)
+    if [ $? -ne 0 ]; then
+        echo "A GitHub token must be provided. Generate one on GitHub:"
+        echo "    https://github.com/settings/tokens/new"
+        echo
+        echo "The token needs to have the 'repo' scope (or probably some"
+        echo "subset of it)."
+        echo ""
+        echo "Then, add it to your git config: "
+        echo "    git config --global --add prtools.token <github-token>"
+        exit -1
     fi
-done
+    set -e
+
+    local head_sha=$(git reflog -n 1 --format=format:%H)
+
+    set +e
+    local remotes="$(git remote | grep -v origin)"
+    if [ $? -ne 0 ]; then
+        if [ $(git remote | grep -c origin) -eq 0 ]; then
+            echo "Coudn't find any remotes. Is this git repo configured yet?"
+        else
+            echo "Couldn't find any remotes other than origin. Perhaps you"
+            echo "should create a fork? You can do this with the 'hub' CLI tool:"
+            echo "    hub fork"
+        fi
+        exit -1
+    fi
+    set -e
+
+    for remote in $(git remote | grep -v origin); do
+        local candidate_sha=$(git ls-remote --heads $remote | grep "$head_sha")
+        if [ -n "$candidate_sha" ]; then
+            local candidate_branch=$(echo "$candidate_sha" | awk '{print $2}' | sed 's,refs/heads/,,')
+            create_pr "$remote" "$candidate_branch"
+            break
+        fi
+    done
+}
+
+main
