@@ -23,6 +23,9 @@ repository.
 
 ## Usage
 
+    $ <make changes with $EDITOR>
+    $ git commit -m "awesomeness here"
+    $ git push $USER HEAD:awesomeness
     $ git create-pr
 
 
