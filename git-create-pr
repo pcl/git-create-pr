@@ -7,13 +7,16 @@ if [ $# -ne 0 ]; then
     exit -1
 fi
 
-token=undefined
+auth=undefined
 
 function create_pr {
     local remote="$1"
     local branch="$2"
 
     local origin_api_path=$(git config --get remote.origin.url | sed 's/.*:\(.*\).git/\1/')
+    local origin_org=$(echo $origin_api_path | sed 's,/.*,,')
+    local origin_repo=$(echo $origin_api_path | sed 's,.*/,,')
+
     local remote_api_path=$(git config --get remote.$remote.url | sed 's/.*:\(.*\).git/\1/')
     local remote_user=$(echo $remote_api_path | sed 's,/.*,,')
     local remote_head="$remote_user:$branch"
@@ -23,34 +26,85 @@ function create_pr {
     local title=$(git log -n 1 --format=format:%s | sed 's/"/\\"/g')
 
     set +e
-    local response=$(curl -s -H "Authorization: token $token" "$api_url" -d "{ \
+    local response=$(curl -s -H "$auth" "$api_url" -d "{ \
         \"title\": \"$title\", \
         \"head\": \"$remote_head\", \
         \"base\": \"master\" \
     }")
     local status=$?
     set -e
-    if [ $? -ne 0 ]; then
+    if [ $status -ne 0 ]; then
         echo "PR creation failed! Output: "
         echo "$response"
+        exit $status
     fi
 
-    local pr_number="$(extract_json "$response" "number")"
-    echo -n "PR $pr_number created! Open in a browser? [Y/n] "
-    read open_pr
-    if [ -z "$open_pr" ] || [ "$open_pr" == "Y" ] || [ "$open_pr" == "y" ]; then
-        local pr_url="$(extract_json "$response" "html_url" | tr -d '"')"
-        open $pr_url
+    local pr_number=$(echo "$response" | jq -r '.number')
+    if [ "$pr_number" = "null" ]; then
+        echo "PR creation failed! Output: "
+        echo "$response"
+        exit -1
+    fi
+
+    local suggestions="$(curl -s -H "$auth" $remote_host/api/graphql -d "{ \
+        \"query\": \"query { \
+            repository(owner: \"$origin_org\", name: \"$origin_repo\") { \
+                pullRequest(number: $pr_number) { \
+                    suggestedReviewers { reviewer { name, login } } } } }\" }" \
+        | jq -r '.data.repository.pullRequest.suggestedReviewers[].reviewer.login')"
+
+    if [ -n "$suggestions" ]; then
+        suggestion_text=" (Suggestions: $(echo $suggestions | tr '\n' ' '))"
+    else
+        suggestion_text=""
+    fi
+    
+    echo -n "PR $pr_number created! Add a reviewer?$suggestion_text [Y|n] "
+    if read_boolean; then
+        if [ -n "$suggestions" ]; then
+            echo
+            echo "Suggested reviewers: $suggestions"
+            read reviewer
+            set +e
+            local rev_response="$(curl -s -H "$auth" $api_url/$pr_number/requested_reviewers -d "{ \
+                \"reviewers\": [ \"$reviewer\" ] \
+            }")"
+            local rev_status=$?
+            set -e
+            if [ $rev_status -ne 0 ]; then
+                echo "Failed to assign reviewer! Note that reviewers must be repo collaborators."
+                echo "$rev_response"
+            fi
+        fi
+        echo
+    fi
+
+    echo -n "Open in a browser? [Y|n] "
+    if read_boolean; then
+        open $(echo "$response" | jq -r '.html_url')
     fi
 }
 
-function extract_json {
-    echo "$1" | grep "^  \"$2\": " | sed 's/.*: \(.*\),.*/\1/'
+function read_boolean {
+    read boolean_response
+    if [ -z "$boolean_response" ] || [ "$boolean_response" == "Y" ] || [ "$boolean_response" == "y" ]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 function main {
+    if ! type jq > /dev/null; then
+        echo "Error: the 'jq' command  must be installed to run this script."
+        echo "You can install it by typing: "
+        echo
+        echo "    brew install jq"
+        exit -1
+    fi
+    
     set +e
-    token=$(git config --get prtools.token)
+    auth="Authorization: token $(git config --get prtools.token)"
     if [ $? -ne 0 ]; then
         echo "A GitHub token must be provided. Generate one on GitHub:"
         echo "    https://github.com/settings/tokens/new"
@@ -82,7 +136,7 @@ function main {
 
     local created=false
     for remote in $(git remote | grep -v origin); do
-        local candidate_sha=$(git ls-remote --heads $remote | grep "$head_sha")
+        local candidate_sha=$(git ls-remote --heads $remote | grep "$head_sha" | head -n 1)
         if [ -n "$candidate_sha" ]; then
             local candidate_branch=$(echo "$candidate_sha" | awk '{print $2}' | sed 's,refs/heads/,,')
             create_pr "$remote" "$candidate_branch"
