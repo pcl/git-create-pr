@@ -46,11 +46,12 @@ function create_pr {
         exit -1
     fi
 
-    local suggestions="$(curl -s -H "$auth" $remote_host/api/graphql -d "{ \
+    local suggestionsJson="$(curl -s -H "$auth" https://$remote_host/api/graphql -d "{ \
         \"query\": \"query { \
-            repository(owner: \"$origin_org\", name: \"$origin_repo\") { \
+            repository(owner: \\\"$origin_org\\\", name: \\\"$origin_repo\\\") { \
                 pullRequest(number: $pr_number) { \
-                    suggestedReviewers { reviewer { name, login } } } } }\" }" \
+                    suggestedReviewers { reviewer { name, login } } } } }\" }")"
+    local suggestions="$(echo $suggestionsJson \
         | jq -r '.data.repository.pullRequest.suggestedReviewers[].reviewer.login')"
 
     if [ -n "$suggestions" ]; then
@@ -61,14 +62,12 @@ function create_pr {
     
     echo -n "PR $pr_number created! Add a reviewer?$suggestion_text [Y|n] "
     if read_boolean; then
-        if [ -n "$suggestions" ]; then
-            echo
-            echo "Suggested reviewers: $suggestions"
-            read reviewer
+        echo -n "Enter reviewer id: "
+        read reviewer
+        if [ -n "$reviewer" ]; then
             set +e
-            local rev_response="$(curl -s -H "$auth" $api_url/$pr_number/requested_reviewers -d "{ \
-                \"reviewers\": [ \"$reviewer\" ] \
-            }")"
+            local json="{ \"reviewers\": [ \"$reviewer\" ] }"
+            local rev_response="$(curl -s -H "$auth" $api_url/$pr_number/requested_reviewers -d "$json")"
             local rev_status=$?
             set -e
             if [ $rev_status -ne 0 ]; then
