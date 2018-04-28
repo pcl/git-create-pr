@@ -1,0 +1,145 @@
+#!/usr/bin/env python
+
+import sys
+from subprocess import *
+
+class PullRequestController:
+
+    auth_header = None
+    remotes = []
+
+    def configure(self):
+        try:
+            auth_token = check_output(['git', 'config', '--get', 'prtools.token'])
+            self.auth_header = "Authorization: token %s" % auth_token
+        except OSError:
+            print('''"A GitHub token must be provided. Generate one on GitHub:
+    https://github.com/settings/tokens/new
+
+The token needs to have the 'repo' scope (or probably some subset of it).
+
+Then, add it to your git config: 
+    git config --global --add prtools.token <github-token>''')
+            return -1
+
+        head_sha = check_output(['git', 'reflog', '-n', '1', '--format=format:%H'])
+        self.remotes = check_output(['git', 'remote']).split('\n')
+        if len(self.remotes) == 0:
+            print("Coudn't find any remotes. Is this git repo configured yet?")
+            return -1
+        else:
+            self.remotes = [r for r in self.remotes if r != 'origin']
+            if len(self.remotes) == 0:
+                print('''Couldn't find any remotes other than origin. Perhaps you
+should create a fork? You can do this with the 'hub' CLI tool:
+    hub fork''')
+                return -1
+
+        return 0
+
+    def parse_remote_url(remote):
+        url = check_output(['git', 'config', '--get', 'remote.%s.url' % remote])
+        api_path = re.sub(r".*:\(.*\).git", '\1', url)
+        org = re.sub(r"/.*", "", api_path)
+        repo = re.sub(r".*/", "", api_path)
+        return (api_path, org, repo)
+        
+    def create_pr(self, remote, branch):
+        (origin_api_path, origin_org, origin_repo) = parse_remote_url('origin')
+        (remote_api_path, remote_user, _) = parse_remote_url(remote)
+        remote_head = "%s:%s" % (remote_user, branch)
+
+        github_host = check_output(['git', 'config', '--get', 'hub.host'])
+        api_url = "https://%s/api/v3/repos/%s/pulls" % (github_host, origin_api_path)
+
+        title = check_output(['git', 'log', '-n', '1', '--format=format:%s'])
+        title = re.sub(r'"', '', title)
+
+        ##### continue conversion here
+        try:
+            response = check_output(['curl', '-s', '-H', self.auth_header, api_url, '-d' '''{ 
+                "title": "%s", 
+                "head": "%s", 
+                "base": "master" 
+            }''' % (title, remote_head)])
+        except:
+            print("PR creation failed! Output: \n%s" % response)
+            return -1
+
+        response_json = json.loads(response)
+        if 'number' not in response_json:
+            print("PR creation failed! Output: \n%s" % response)
+            return -1
+        else:
+            pr_number = response_json['number']
+
+        query = { "query": '''query {
+            repository(owner: "%s", name: "%s") {
+                pullRequest(number: %d) {
+                    suggestedReviewers { reviewer { name, login } }
+                }
+            }
+        }''' % (origin_org, origin_repo, pr_number) }
+            
+        response = check_output(['curl', '-s', '-H', self.auth_header,
+                                 'https://$remote_host/api/graphql', '-d', json.dumps(query)])
+        response_json = json.loads(response)
+        suggested_reviewers = response_json['data']['repository']['pullRequest']['suggestedReviewers']
+        suggested_logins = [ r['reviewer']['login'] for r in suggested_reviewers ]
+        if suggested_logins != None and len(suggested_logins) > 0:
+            suggestion_text=" (Suggestions: %s)" % suggested_logins.join(" ")
+        else:
+            suggestion_text=""
+    
+        if self.ask("PR %d created! Add a reviewer?%s [Y|n] " % (pr_number, suggestion_text)):
+            reviewer = raw_input("Enter reviewer id: ")
+            if reviewer != None:
+                reviewer_json = '{ "reviewers": [ "%s" ] }' % reviewer
+                try:
+                    response = check_response(['curl', '-s', '-H', self.auth_header,
+                                               '%s/%d/requested_reviewers' % (api_url, pr_number),
+                                               '-d', json.dumps(reviewer_json)])
+                except ex:
+                    print("Failed to assign reviewer! Note that reviewers must be repo collaborators.")
+                    print(ex)
+
+        if self.ask("Open in a browser? [Y|n] "):
+            check_response(['open', json.loads(response)['html_url']])
+
+        return 0
+
+    def ask(self, msg):
+        boolean_response = raw_input(msg)
+        return boolean_response == None or boolean_response == 'y' or boolean_response == 'Y'
+
+    def do_create(self):
+        for remote in check_output(['git', 'remote']).split('\n'):
+            if remote == 'origin' or remote == '':
+                continue
+            
+            lines = check_output(['git', 'ls-remote', '--heads', remote]).split('\n')
+            candidate_shas = [l for l in lines if l.indexof(head_sha) != -1]
+            if len(candidate_shas) > 0:
+                candidate_rhs = candidate_shas[0].split(' ')
+                candidate_branch = re.sub(r'refs/heads/', '', candidate_rhs)
+                return self.create_pr(remote, candidate_branch)
+
+        print("No changes found in the local repo!")
+        return -1
+
+def main(args):
+    if len(args) != 2 or args[1] != "create":
+        print("Usage: git pr create")
+        return -1
+    else:
+        controller = PullRequestController()
+
+        # TODO move all the error logging here, instead of doing inline error prints
+        status = controller.configure()
+        if status != 0:
+            return -1
+        else:
+            return controller.do_create()
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
