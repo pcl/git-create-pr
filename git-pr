@@ -6,7 +6,7 @@
 # Next line is bilingual: it starts a comment in Python, and is a no-op in shell
 """:"
 
-# Find a suitable python interpreter
+# Find a suitable python interpreter. TODO: alternate locations for Windows and Linux
 
 for cmd in python3 python /usr/local/Cellar/python/3.6.1/bin/python3 ; do
     command -V >/dev/null $cmd 2>&1 && ( $cmd -V 2>&1 | grep -c 3 >/dev/null ) && exec $cmd $0 "$@"
@@ -40,6 +40,7 @@ class PullRequestController:
 
     auth_token = None
     remotes = []
+    interactive = True
 
     def configure(self):
         try:
@@ -82,7 +83,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
             }
         }''' % (origin_org, origin_repo, pr_number)
     
-    def create_pr(self, remote, branch):
+    def create_pr(self, remote, branch, reviewer):
         (origin_api_path, origin_org, origin_repo) = self.parse_remote_url('origin')
         (remote_api_path, remote_user, _) = self.parse_remote_url(remote)
         remote_head = "%s:%s" % (remote_user, branch)
@@ -121,22 +122,29 @@ should create a fork? You can do this with the 'hub' CLI tool:
             suggestion_text=" (Suggestions: %s)" % " ".join(suggested_logins)
         else:
             suggestion_text=""
-    
-        if self.ask("PR %d created! Add a reviewer?%s [Y|n] " % (pr_number, suggestion_text)):
-            reviewer = input("Enter reviewer id: ")
+
+        status = 0
+        if (reviewer != None or
+            (self.interactive and
+             self.ask("PR %d created! Add a reviewer?%s [Y|n] " % (pr_number, suggestion_text)))):
+
+            if self.interactive and reviewer == None:
+                reviewer = input("Enter reviewer id: ")
             if reviewer != None:
                 reviewer_json = '{ "reviewers": [ "%s" ] }' % reviewer
                 try:
                     response = s.post('%s/%d/requested_reviewers' % (api_url, pr_number),
                                       data=json.dumps(reviewer_json))
-                except ex:
+                except Exception as ex:
                     print("Failed to assign reviewer! Note that reviewers must be repo collaborators.")
                     print(ex)
+                    status = -1
 
-        if self.ask("Open in a browser? [Y|n] "):
-            check_response(['open', json.loads(response)['html_url']])
+        if self.interactive and self.ask("Open in a browser? [Y|n] "):
+            # TODO open() for Linux, Windows.
+            check_output(['open', json.loads(response.content)['html_url']])
 
-        return 0
+        return status
 
     def ask(self, msg):
         boolean_response = input(msg)
@@ -153,7 +161,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
             if len(candidate_shas) > 0:
                 candidate_rhs = candidate_shas[0].split(' ')
                 candidate_branch = re.sub(r'refs/heads/', '', candidate_rhs)
-                return self.create_pr(remote, candidate_branch)
+                return self.create_pr(remote, candidate_branch, None)
 
         print("No changes found in the local repo!")
         return -1

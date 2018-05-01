@@ -29,11 +29,15 @@ class TestGitPRCreate(unittest.TestCase):
         responses.add(responses.POST, 'https://github.com/api/v3/repos/pcl/git-pull-request/pulls',
                       json={'number': 7}, status=200)
         responses.add_callback(responses.POST, 'https://github.com/api/graphql', self.graphql_callback)
+        responses.add(responses.POST, 'https://github.com/api/v3/repos/pcl/git-pull-request/pulls/7/requested_reviewers',
+                      json={'html_url': 'https://github.com/pcl/git-pull-request/pulls/7'}, status=200)
+
         self.prc = git_pr.PullRequestController()
+        self.prc.interactive = False
         self.prc.configure()
 
     @responses.activate
     def test_create_pr(self):
         self.assertEqual(('github.com', 'pcl', 'git-pull-request'), self.prc.parse_remote_url('origin'))
-        self.prc.create_pr('origin', 'branch')
+        self.assertEqual(0, self.prc.create_pr('origin', 'branch', 'pcl'))
         
