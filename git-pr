@@ -30,18 +30,20 @@ exit -2
 # Shell commands end here
 # Python script follows (example commands shown)
 
-import sys
+import json
+import re
+import requests
 from subprocess import *
+import sys
 
 class PullRequestController:
 
-    auth_header = None
+    auth_token = None
     remotes = []
 
     def configure(self):
         try:
-            auth_token = check_output(['git', 'config', '--get', 'prtools.token'])
-            self.auth_header = "Authorization: token %s" % auth_token
+            self.auth_token = str(check_output(['git', 'config', '--get', 'prtools.token']), 'utf-8')
         except OSError:
             print('''"A GitHub token must be provided. Generate one on GitHub:
     https://github.com/settings/tokens/new
@@ -52,8 +54,7 @@ Then, add it to your git config:
     git config --global --add prtools.token <github-token>''')
             return -1
 
-        head_sha = check_output(['git', 'reflog', '-n', '1', '--format=format:%H'])
-        self.remotes = check_output(['git', 'remote']).split('\n')
+        self.remotes = str(check_output(['git', 'remote']), 'utf-8').split('\n')
         if len(self.remotes) == 0:
             print("Coudn't find any remotes. Is this git repo configured yet?")
             return -1
@@ -67,68 +68,67 @@ should create a fork? You can do this with the 'hub' CLI tool:
 
         return 0
 
-    def parse_remote_url(remote):
-        url = check_output(['git', 'config', '--get', 'remote.%s.url' % remote])
-        api_path = re.sub(r".*:\(.*\).git", '\1', url)
-        org = re.sub(r"/.*", "", api_path)
-        repo = re.sub(r".*/", "", api_path)
-        return (api_path, org, repo)
-        
+    def parse_remote_url(self, remote):
+        url = str(check_output(['git', 'config', '--get', 'remote.%s.url' % remote]), 'utf-8')
+        matches = re.match(r"^git@(.*):(.*)/(.*).git$", url)
+        return (matches[1], matches[2], matches[3])
+
+    def suggested_reviewers_query(self, origin_org, origin_repo, pr_number):
+        return '''query {
+            repository(owner: "%s", name: "%s") {
+                pullRequest(number: %d) {
+                    suggestedReviewers { reviewer { name, login } }
+                }
+            }
+        }''' % (origin_org, origin_repo, pr_number)
+    
     def create_pr(self, remote, branch):
-        (origin_api_path, origin_org, origin_repo) = parse_remote_url('origin')
-        (remote_api_path, remote_user, _) = parse_remote_url(remote)
+        (origin_api_path, origin_org, origin_repo) = self.parse_remote_url('origin')
+        (remote_api_path, remote_user, _) = self.parse_remote_url(remote)
         remote_head = "%s:%s" % (remote_user, branch)
 
-        github_host = check_output(['git', 'config', '--get', 'hub.host'])
-        api_url = "https://%s/api/v3/repos/%s/pulls" % (github_host, origin_api_path)
+        api_url = "https://%s/api/v3/repos/%s/%s/pulls" % (origin_api_path, origin_org, origin_repo)
 
-        title = check_output(['git', 'log', '-n', '1', '--format=format:%s'])
+        title = str(check_output(['git', 'log', '-n', '1', '--format=format:%s']), 'utf-8')
         title = re.sub(r'"', '', title)
 
-        ##### continue conversion here
+        s = requests.Session()
+        s.headers.update({ "Authorization": "Bearer token %s" % self.auth_token })
         try:
-            response = check_output(['curl', '-s', '-H', self.auth_header, api_url, '-d' '''{ 
+            response = s.post(api_url, data='''{ 
                 "title": "%s", 
                 "head": "%s", 
                 "base": "master" 
-            }''' % (title, remote_head)])
-        except:
-            print("PR creation failed! Output: \n%s" % response)
+            }''' % (title, remote_head))
+        except Exception as ex:
+            print("PR creation failed! Output: \n%s" % ex)
             return -1
 
-        response_json = json.loads(response)
+        response_json = json.loads(response.content)
         if 'number' not in response_json:
             print("PR creation failed! Output: \n%s" % response)
             return -1
         else:
             pr_number = response_json['number']
 
-        query = { "query": '''query {
-            repository(owner: "%s", name: "%s") {
-                pullRequest(number: %d) {
-                    suggestedReviewers { reviewer { name, login } }
-                }
-            }
-        }''' % (origin_org, origin_repo, pr_number) }
+        query = { "query": self.suggested_reviewers_query(origin_org, origin_repo, pr_number) }
             
-        response = check_output(['curl', '-s', '-H', self.auth_header,
-                                 'https://$remote_host/api/graphql', '-d', json.dumps(query)])
-        response_json = json.loads(response)
+        response = s.post('https://%s/api/graphql' % origin_api_path, data=json.dumps(query))
+        response_json = json.loads(response.content)
         suggested_reviewers = response_json['data']['repository']['pullRequest']['suggestedReviewers']
         suggested_logins = [ r['reviewer']['login'] for r in suggested_reviewers ]
         if suggested_logins != None and len(suggested_logins) > 0:
-            suggestion_text=" (Suggestions: %s)" % suggested_logins.join(" ")
+            suggestion_text=" (Suggestions: %s)" % " ".join(suggested_logins)
         else:
             suggestion_text=""
     
         if self.ask("PR %d created! Add a reviewer?%s [Y|n] " % (pr_number, suggestion_text)):
-            reviewer = raw_input("Enter reviewer id: ")
+            reviewer = input("Enter reviewer id: ")
             if reviewer != None:
                 reviewer_json = '{ "reviewers": [ "%s" ] }' % reviewer
                 try:
-                    response = check_response(['curl', '-s', '-H', self.auth_header,
-                                               '%s/%d/requested_reviewers' % (api_url, pr_number),
-                                               '-d', json.dumps(reviewer_json)])
+                    response = s.post('%s/%d/requested_reviewers' % (api_url, pr_number),
+                                      data=json.dumps(reviewer_json))
                 except ex:
                     print("Failed to assign reviewer! Note that reviewers must be repo collaborators.")
                     print(ex)
@@ -139,15 +139,16 @@ should create a fork? You can do this with the 'hub' CLI tool:
         return 0
 
     def ask(self, msg):
-        boolean_response = raw_input(msg)
+        boolean_response = input(msg)
         return boolean_response == None or boolean_response == 'y' or boolean_response == 'Y'
 
     def do_create(self):
-        for remote in check_output(['git', 'remote']).split('\n'):
+        head_sha = str(check_output(['git', 'reflog', '-n', '1', '--format=format:%H']), 'utf-8')
+        for remote in self.remotes:
             if remote == 'origin' or remote == '':
                 continue
             
-            lines = check_output(['git', 'ls-remote', '--heads', remote]).split('\n')
+            lines = str(check_output(['git', 'ls-remote', '--heads', remote]), 'utf-8').split('\n')
             candidate_shas = [l for l in lines if l.indexof(head_sha) != -1]
             if len(candidate_shas) > 0:
                 candidate_rhs = candidate_shas[0].split(' ')

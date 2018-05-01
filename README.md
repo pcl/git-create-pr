@@ -41,7 +41,7 @@ URLs conform to the `git@...` protocol format.
 ## Contributing
 
 Contributions are welcome! I suggest that you create a PR if you've got
-any improvements. Or even better, if you want to set up a test harness!
+any improvements. 
 
 See the [issues list](https://github.com/pcl/git-create-pr/issues) if 
 you're looking for inspiration.
