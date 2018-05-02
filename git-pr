@@ -37,6 +37,7 @@ import requests
 from subprocess import *
 import sys
 import tabulate
+tabulate.PRESERVE_WHITESPACE = True
 
 class PullRequestController:
 
@@ -193,15 +194,23 @@ should create a fork? You can do this with the 'hub' CLI tool:
         # TODO first or last? Sort order? Paginate, or at least indicate incompleteness!
         return '''query {
             repository(owner: "%s", name: "%s") {
-                pullRequests(last: 10, states: OPEN) {
+                pullRequests(last: 30, states: OPEN) {
                     nodes() { 
                         number,
                         title,
-                        state,
                         mergeable, 
                         viewerDidAuthor,
                         viewerSubscription,
-                        author { login }
+                        author { login },
+                        commits(last: 1) {
+                            edges {
+                                node {
+                                    commit {
+                                        status { state }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -210,14 +219,52 @@ should create a fork? You can do this with the 'hub' CLI tool:
     def do_list(self):
         response = self.graphq(self.pulls_query())
 
+        def status(node):
+            # TODO include merge review requirements in this
+            mergeable = node['mergeable'] == 'MERGEABLE'
+            check_results = node['commits']['edges'][0]['node']['commit']['status']['state'].lower()
+            if check_results == "success":
+                if mergeable:
+                    return status_from_mergeable_state(node, "? attention required")
+                else:
+                    return "⨯ merge conflict"
+            elif check_results == "pending":
+                if mergeable:
+                    return status_from_mergeable_state(node, "? checks pending")
+                else:
+                    return "⨯ merge conflict; checks pending"
+            elif check_results == "failure":
+                return "⨯ checks failed"
+            else:
+                return "⨯ unknown check result: " + check_results
+
+        def get_mergeable_state(pr_number):
+            response = self.session.get('%s/%d' % (self.pull_url(), pr_number))
+            return json.loads(response.content)['mergeable_state']
+        
+        def status_from_mergeable_state(node, dirty_text):
+            mergeable_state = get_mergeable_state(node['number'])
+            if mergeable_state == "blocked":
+                return "  awaiting review"
+            elif mergeable_state == "dirty":
+                return dirty_text
+            elif mergeable_state == "clean":
+                return "✔ ready to merge"
+            else:
+                return "⨯ unknown mergeable_state: " + mergeable_state
+
+        # TODO make the filter optional, based on command line arguments
         def filter(node):
             return node['viewerDidAuthor'] or node['viewerSubscription'] == 'SUBSCRIBED'
-        
-        nodes = [ (n['number'], n['author']['login'], n['mergeable'], n['title'])
+
+        nodes = [ (n['number'], n['author']['login'], status(n), n['title'])
                   for n in response['data']['repository']['pullRequests']['nodes'] if filter(n) ]
-        print()
-        print(tabulate.tabulate(nodes, headers=['PR', 'Author', 'Mergeable?', 'Title']))
-        print()
+        nodes.reverse()
+
+        if len(nodes) > 0:
+            print(tabulate.tabulate(nodes, headers=['PR', 'Author', 'Status', 'Title']))
+        else:
+            print("You don't have any open PRs! Time to write some code.")
         return 0
 
 def main(args):
