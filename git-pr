@@ -38,13 +38,13 @@ import sys
 
 class PullRequestController:
 
-    auth_token = None
     remotes = []
     interactive = True
+    session = None
 
     def configure(self):
         try:
-            self.auth_token = str(check_output(['git', 'config', '--get', 'prtools.token']), 'utf-8')
+            auth_token = str(check_output(['git', 'config', '--get', 'prtools.token']), 'utf-8').strip()
         except OSError:
             print('''"A GitHub token must be provided. Generate one on GitHub:
     https://github.com/settings/tokens/new
@@ -55,6 +55,15 @@ Then, add it to your git config:
     git config --global --add prtools.token <github-token>''')
             return -1
 
+        self.session = requests.Session()
+        self.session.headers.update({ "Authorization": "token %s" % auth_token })
+
+        (self.origin_api_path, self.origin_org, self.origin_repo) = self.parse_remote_url('origin')
+
+        
+        return 0
+    
+    def configure_for_pushing(self):
         self.remotes = str(check_output(['git', 'remote']), 'utf-8').split('\n')
         if len(self.remotes) == 0:
             print("Coudn't find any remotes. Is this git repo configured yet?")
@@ -74,29 +83,40 @@ should create a fork? You can do this with the 'hub' CLI tool:
         matches = re.match(r"^git@(.*):(.*)/(.*).git$", url)
         return (matches[1], matches[2], matches[3])
 
-    def suggested_reviewers_query(self, origin_org, origin_repo, pr_number):
+    def suggested_reviewers_query(self, pr_number):
         return '''query {
             repository(owner: "%s", name: "%s") {
                 pullRequest(number: %d) {
                     suggestedReviewers { reviewer { name, login } }
                 }
             }
-        }''' % (origin_org, origin_repo, pr_number)
-    
+        }''' % (self.origin_org, self.origin_repo, pr_number)
+
+    def graphq(self, graphql_query):
+        json_query = { "query": graphql_query }
+        graphql_url = 'https://%s/api/graphql' % self.origin_api_path
+        response = self.session.post(graphql_url, data=json.dumps(json_query))
+        response_json = json.loads(response.content)
+        if 'errors' in response_json:
+            raise Exception(response.content)
+        else:
+            return response_json
+
+    def pull_url(self):
+        return "https://%s/api/v3/repos/%s/%s/pulls" % (
+            self.origin_api_path, self.origin_org, self.origin_repo)
+
     def create_pr(self, remote, branch, reviewer):
-        (origin_api_path, origin_org, origin_repo) = self.parse_remote_url('origin')
         (remote_api_path, remote_user, _) = self.parse_remote_url(remote)
         remote_head = "%s:%s" % (remote_user, branch)
 
-        api_url = "https://%s/api/v3/repos/%s/%s/pulls" % (origin_api_path, origin_org, origin_repo)
+        api_url = self.pull_url()
 
-        title = str(check_output(['git', 'log', '-n', '1', '--format=format:%s']), 'utf-8')
+        title = str(check_output(['git', 'log', '-n', '1', '--format=format:%s']), 'utf-8').strip()
         title = re.sub(r'"', '', title)
 
-        s = requests.Session()
-        s.headers.update({ "Authorization": "Bearer token %s" % self.auth_token })
         try:
-            response = s.post(api_url, data='''{ 
+            response = self.session.post(api_url, data='''{ 
                 "title": "%s", 
                 "head": "%s", 
                 "base": "master" 
@@ -112,10 +132,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
         else:
             pr_number = response_json['number']
 
-        query = { "query": self.suggested_reviewers_query(origin_org, origin_repo, pr_number) }
-            
-        response = s.post('https://%s/api/graphql' % origin_api_path, data=json.dumps(query))
-        response_json = json.loads(response.content)
+        response_json = self.graphq(self.suggested_reviewers_query(pr_number))
         suggested_reviewers = response_json['data']['repository']['pullRequest']['suggestedReviewers']
         suggested_logins = [ r['reviewer']['login'] for r in suggested_reviewers ]
         if suggested_logins != None and len(suggested_logins) > 0:
@@ -133,8 +150,8 @@ should create a fork? You can do this with the 'hub' CLI tool:
             if reviewer != None:
                 reviewer_json = '{ "reviewers": [ "%s" ] }' % reviewer
                 try:
-                    response = s.post('%s/%d/requested_reviewers' % (api_url, pr_number),
-                                      data=json.dumps(reviewer_json))
+                    response = self.session.post('%s/%d/requested_reviewers' % (api_url, pr_number),
+                                                 data=json.dumps(reviewer_json))
                 except Exception as ex:
                     print("Failed to assign reviewer! Note that reviewers must be repo collaborators.")
                     print(ex)
@@ -151,7 +168,11 @@ should create a fork? You can do this with the 'hub' CLI tool:
         return boolean_response == None or boolean_response == 'y' or boolean_response == 'Y'
 
     def do_create(self):
-        head_sha = str(check_output(['git', 'reflog', '-n', '1', '--format=format:%H']), 'utf-8')
+        status = controller.configure_for_pushing()
+        if status != 0:
+            return status
+        
+        head_sha = str(check_output(['git', 'reflog', '-n', '1', '--format=format:%H']), 'utf-8').strip()
         for remote in self.remotes:
             if remote == 'origin' or remote == '':
                 continue
@@ -161,6 +182,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
             if len(candidate_shas) > 0:
                 candidate_rhs = candidate_shas[0].split(' ')
                 candidate_branch = re.sub(r'refs/heads/', '', candidate_rhs)
+                # TODO instead of short-circuiting, perhaps look at all remotes and prompt if multiple?
                 return self.create_pr(remote, candidate_branch, None)
 
         print("No changes found in the local repo!")

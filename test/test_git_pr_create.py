@@ -19,7 +19,7 @@ class TestGitPRCreate(unittest.TestCase):
 
     def graphql_callback(self, request):
         payload = json.loads(request.body)
-        if payload['query'] == self.prc.suggested_reviewers_query('pcl', 'git-pull-request', 7):
+        if payload['query'] == self.prc.suggested_reviewers_query(7):
             return (200, {}, '{"data": {"repository": {"pullRequest": '
                     '{ "suggestedReviewers": [ { "reviewer": { "login": "pcl" } } ] } } } }')
         else:
