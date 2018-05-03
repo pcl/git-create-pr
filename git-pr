@@ -166,10 +166,10 @@ should create a fork? You can do this with the 'hub' CLI tool:
 
     def ask(self, msg):
         boolean_response = input(msg)
-        return boolean_response == None or boolean_response == 'y' or boolean_response == 'Y'
+        return boolean_response == '' or boolean_response == 'y' or boolean_response == 'Y'
 
     def do_create(self):
-        status = controller.configure_for_pushing()
+        status = self.configure_for_pushing()
         if status != 0:
             return status
         
@@ -179,10 +179,9 @@ should create a fork? You can do this with the 'hub' CLI tool:
                 continue
             
             lines = str(check_output(['git', 'ls-remote', '--heads', remote]), 'utf-8').split('\n')
-            candidate_shas = [l for l in lines if l.indexof(head_sha) != -1]
+            candidate_shas = [l for l in lines if head_sha in l]
             if len(candidate_shas) > 0:
-                candidate_rhs = candidate_shas[0].split(' ')
-                candidate_branch = re.sub(r'refs/heads/', '', candidate_rhs)
+                candidate_branch = re.match(r".*\trefs/heads/(.*)$", candidate_shas[0])[1]
                 # TODO instead of short-circuiting, perhaps look at all remotes and prompt if multiple?
                 return self.create_pr(remote, candidate_branch, None)
 
