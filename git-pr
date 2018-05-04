@@ -162,15 +162,15 @@ should create a fork? You can do this with the 'hub' CLI tool:
             if reviewer != None:
                 reviewer_json = '{ "reviewers": [ "%s" ] }' % reviewer
                 try:
-                    response = self.session.post('%s/%d/requested_reviewers' % (api_url, pr_number),
-                                                 data=json.dumps(reviewer_json))
+                    self.session.post('%s/%d/requested_reviewers' % (api_url, pr_number),
+                                      data=json.dumps(reviewer_json))
                 except Exception as ex:
                     print("Failed to assign reviewer! Note that reviewers must be repo collaborators.")
                     print(ex)
                     status = -1
 
         if self.interactive and self.ask("Open in a browser? [Y|n] "):
-            self.open_url(json.loads(response.content)['html_url'])
+            self.open_url(response_json['html_url'])
 
         return status
 
