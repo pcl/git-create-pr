@@ -282,9 +282,9 @@ should create a fork? You can do this with the 'hub' CLI tool:
         if len(nodes) > 0:
             print(tabulate.tabulate(nodes, headers=['PR', 'Author', 'Status', 'Title']))
             print()
-            print("  To view a PR on the web:                       git pr browse <pr-number>")
-            print("  To merge a PR in the 'ready to merge' state:   git pr merge <pr-number>")
-            print("  To create a local tracking branch for a PR:    git pr checkout <pr-number>")
+            print("  To view a PR on the web:                         git pr browse <pr-no>")
+            print("  To merge a PR in the 'ready to merge' state:     git pr merge <pr-no>")
+            print("  To create a local tracking branch for a PR:      git pr checkout <pr-no>")
         else:
             print("You don't have any %s PRs! Time to write some code." % args.filter)
         return 0
