@@ -281,6 +281,10 @@ should create a fork? You can do this with the 'hub' CLI tool:
 
         if len(nodes) > 0:
             print(tabulate.tabulate(nodes, headers=['PR', 'Author', 'Status', 'Title']))
+            print()
+            print("  To view a PR on the web:                       git pr browse <pr-number>")
+            print("  To merge a PR in the 'ready to merge' state:   git pr merge <pr-number>")
+            print("  To create a local tracking branch for a PR:    git pr checkout <pr-number>")
         else:
             print("You don't have any %s PRs! Time to write some code." % args.filter)
         return 0
@@ -304,6 +308,20 @@ should create a fork? You can do this with the 'hub' CLI tool:
         else:
             open_subpath('pulls')
     
+    def do_checkout(self, args):
+        config_status = self.configure()
+        if config_status != 0:
+            return config_status
+
+        print("Not yet implemented!")
+
+    def do_merge(self, args):
+        config_status = self.configure()
+        if config_status != 0:
+            return config_status
+
+        print("Not yet implemented!")
+
 def main(args):
     parser = argparse.ArgumentParser(description='Manage GitHub pull requests without leaving your $SHELL')
     subparsers = parser.add_subparsers()
@@ -325,6 +343,15 @@ def main(args):
         help='Open the specified PR in your browser, or the PR list page, if none is specified.')
     parser_browse.set_defaults(func=lambda args: PullRequestController().do_browse(args))
     parser_browse.add_argument('pr_number', metavar='pr-number', type=int, nargs='*', default=None)
+
+    parser_checkout = subparsers.add_parser('checkout', help='Create a local tracking branch for a ' +
+                                            'given PR, and check it out.')
+    parser_checkout.set_defaults(func=lambda args: PullRequestController().do_checkout(args))
+    parser_checkout.add_argument('pr_number', metavar='pr-number', type=int)
+
+    parser_merge = subparsers.add_parser('merge', help="Merge the specified PR using GitHub's APIs.")
+    parser_merge.set_defaults(func=lambda args: PullRequestController().do_merge(args))
+    parser_merge.add_argument('pr_number', metavar='pr-number', type=int)
 
     args = parser.parse_args()
 
