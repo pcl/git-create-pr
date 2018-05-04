@@ -228,7 +228,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
             }
         }''' % (self.origin_org, self.origin_repo)
 
-    def do_list(self):
+    def do_list(self, args):
         config_status = self.configure()
         if config_status != 0:
             return config_status
@@ -269,9 +269,11 @@ should create a fork? You can do this with the 'hub' CLI tool:
             else:
                 return "⨯ unknown mergeable_state: " + mergeable_state
 
-        # TODO make the filter optional, based on command line arguments
         def filter(node):
-            return node['viewerDidAuthor'] or node['viewerSubscription'] == 'SUBSCRIBED'
+            if args.filter == 'open':
+                return True
+            else:
+                return node['viewerDidAuthor'] or node['viewerSubscription'] == 'SUBSCRIBED'
 
         nodes = [ (n['number'], n['author']['login'], status(n), n['title'])
                   for n in response['data']['repository']['pullRequests']['nodes'] if filter(n) ]
@@ -280,7 +282,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
         if len(nodes) > 0:
             print(tabulate.tabulate(nodes, headers=['PR', 'Author', 'Status', 'Title']))
         else:
-            print("You don't have any open PRs! Time to write some code.")
+            print("You don't have any %s PRs! Time to write some code." % args.filter)
         return 0
 
     def open_url(self, url):
@@ -313,7 +315,11 @@ def main(args):
     parser_create.set_defaults(func=lambda args: PullRequestController().do_create())
     
     parser_list = subparsers.add_parser('list', help='List open PRs in the current origin repo')
-    parser_list.set_defaults(func=lambda args: PullRequestController().do_list())
+    parser_list.set_defaults(func=lambda args: PullRequestController().do_list(args))
+    parser_list.add_argument("filter", type=str, choices=[ "open", "subscribed" ],
+                             default="subscribed", nargs='?',
+                             help='A filter to apply to the PRs to list. Defaults to all open PRs'
+                             + ' that you are subscribed to or that you created.')
 
     parser_browse = subparsers.add_parser('browse', 
         help='Open the specified PR in your browser, or the PR list page, if none is specified.')
