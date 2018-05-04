@@ -266,6 +266,8 @@ should create a fork? You can do this with the 'hub' CLI tool:
                 return dirty_text
             elif mergeable_state == "clean":
                 return "✔ ready to merge"
+            elif mergeable_state == 'unstable':
+                return "⨯ unstable"
             else:
                 return "⨯ unknown mergeable_state: " + mergeable_state
 
