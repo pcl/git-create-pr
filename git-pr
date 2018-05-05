@@ -144,8 +144,8 @@ should create a fork? You can do this with the 'hub' CLI tool:
         else:
             pr_number = response_json['number']
 
-        response_json = self.graphq(self.suggested_reviewers_query(pr_number))
-        suggested_reviewers = response_json['data']['repository']['pullRequest']['suggestedReviewers']
+        suggested_reviewers_response_json = self.graphq(self.suggested_reviewers_query(pr_number))
+        suggested_reviewers = suggested_reviewers_response_json['data']['repository']['pullRequest']['suggestedReviewers']
         suggested_logins = [ r['reviewer']['login'] for r in suggested_reviewers ]
         if suggested_logins != None and len(suggested_logins) > 0:
             suggestion_text=" (Suggestions: %s)" % " ".join(suggested_logins)
