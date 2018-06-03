@@ -21,6 +21,16 @@ personal fork and using the GitHub APIs to generate and manage PRs against
 the origin repository.
 
 
+## Installation
+
+The easiest way to install `git pr` on a Mac is to use `brew`:
+
+    $ brew install https://raw.githubusercontent.com/pcl/homebrew-git-pull-request/master/git-pull-request.rb
+
+If you're using Windows or Linux, download the `git-pr`
+[script](https://raw.githubusercontent.com/pcl/git-pull-request/master/git-pr)
+and put it somewhere in your path.
+
 ## Usage
 
     $ <make changes with $EDITOR>
@@ -45,3 +55,14 @@ any improvements.
 
 See the [issues list](https://github.com/pcl/git-create-pr/issues) if 
 you're looking for inspiration.
+
+
+## Other Command-Line Pull Request Tools
+
+There are a number of other CLI tools for interacting with GitHub PRs
+from the command line, none of which did quite what I was looking
+for. Here are some others that I've found:
+
+- https://github.com/vitorgalvao/tiny-scripts/blob/master/climergebutton
+- https://github.com/jd/git-pull-request
+- https://pypi.org/project/git-pr/
