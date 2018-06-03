@@ -358,7 +358,20 @@ should create a fork? You can do this with the 'hub' CLI tool:
         if config_status != 0:
             return config_status
 
-        print("Not yet implemented!")
+        merge_response = self.session.post('%s/%d/merge' % (self.pull_url(), args.pr_number))
+        if merge_response.status_code > 299:
+            print("Server responded with status code %d!" % merge_response.status_code)
+        merge_result = json.loads(merge_response.content)
+        print(merge_result.message)
+
+        if merge_response.status_code <= 299:
+            if args.delete or self.interactive and ask("Delete PR branch? [Y|n]: "):
+                pr_response = self.session.get(self.pull_url())
+                pr = json.loads(pr_response.content)
+                if 'head' in pr: # perhaps the branch has already been deleted
+                    branchname = pr['head']['ref']
+                    repo_url = pr['head']['url']
+                    self.session.delete("%s/git/refs/heads/%s" % (repo_url, branchname))
 
     def do_set_token(self, args):
         (host, _, _) = self.parse_remote('origin')
@@ -405,9 +418,11 @@ def main(args):
     parser_checkout.set_defaults(func=lambda args: PullRequestController().do_checkout(args))
     parser_checkout.add_argument('pr_number', metavar='pr-number', type=int)
 
-    parser_merge = subparsers.add_parser('merge', help="Merge the specified PR using GitHub's APIs.")
+    parser_merge = subparsers.add_parser('merge', help="Merge the specified PR, using a merge commit.")
     parser_merge.set_defaults(func=lambda args: PullRequestController().do_merge(args))
     parser_merge.add_argument('pr_number', metavar='pr-number', type=int)
+    parser_merge.add_argument('-d', '--delete-branch', dest='delete', action='store_true',
+                              help="Delete the PR branch after successful merge")
 
     parser_set_token = subparsers.add_parser('set-token', help="Set the token for the current remote repository, optionally reading the token from stdin.")
     parser_set_token.set_defaults(func=lambda args: PullRequestController().do_set_token(args))
