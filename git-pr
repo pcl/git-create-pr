@@ -32,6 +32,7 @@ exit -2
 # Python script follows (example commands shown)
 
 import argparse
+import getpass
 import json
 import re
 import requests
@@ -46,22 +47,23 @@ class PullRequestController:
     session = None
 
     def configure(self):
-        try:
-            auth_token = str(check_output(['git', 'config', '--get', 'prtools.token']), 'utf-8').strip()
-        except OSError:
-            print('''"A GitHub token must be provided. Generate one on GitHub:
-    https://github.com/settings/tokens/new
+        (host, self.origin_org, self.origin_repo) = self.parse_remote('origin')
+
+        result = run(['git', 'config', '--get', 'git-pr.%s.token' % host], stdout=PIPE)
+        if result.returncode != 0:
+            print('''A GitHub token must be provided. Generate one on GitHub:
+    https://%s/settings/tokens/new
 
 The token needs to have the 'repo' scope (or probably some subset of it).
 
 Then, add it to your git config: 
-    git config --global --add prtools.token <github-token>''')
+    git-pr set-token <github-token>''' % host)
             return -1
+
+        auth_token = str(result.stdout, 'utf-8').strip()
 
         self.session = requests.Session()
         self.session.headers.update({ "Authorization": "token %s" % auth_token })
-
-        (host, self.origin_org, self.origin_repo) = self.parse_remote('origin')
 
         # GitHub Enterprise deployments host the API at <server>/api; GitHub itself
         # hosts the API at <api.github.com>
@@ -358,6 +360,19 @@ should create a fork? You can do this with the 'hub' CLI tool:
 
         print("Not yet implemented!")
 
+    def do_set_token(self, args):
+        (host, _, _) = self.parse_remote('origin')
+        if args.token == None:
+            token = getpass.getpass("Enter token for %s: " % host)
+            if token == None:
+                print("Error: no token provided!")
+                return -1
+        else:
+            token = args.token
+
+        run(['git', 'config', '--unset-all', 'git-pr.%s.token' % host])
+        check_output(['git', 'config', '--global', '--add', 'git-pr.%s.token' % host, token])
+
 def main(args):
     parser = argparse.ArgumentParser(description='Manage GitHub pull requests without leaving your $SHELL')
     subparsers = parser.add_subparsers()
@@ -393,6 +408,10 @@ def main(args):
     parser_merge = subparsers.add_parser('merge', help="Merge the specified PR using GitHub's APIs.")
     parser_merge.set_defaults(func=lambda args: PullRequestController().do_merge(args))
     parser_merge.add_argument('pr_number', metavar='pr-number', type=int)
+
+    parser_set_token = subparsers.add_parser('set-token', help="Set the token for the current remote repository, optionally reading the token from stdin.")
+    parser_set_token.set_defaults(func=lambda args: PullRequestController().do_set_token(args))
+    parser_set_token.add_argument('token', type=str, nargs='?', default=None)
 
     args = parser.parse_args()
 
