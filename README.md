@@ -25,7 +25,7 @@ the origin repository.
 
 The easiest way to install `git pr` on a Mac is to use `brew`:
 
-    $ brew install https://raw.githubusercontent.com/pcl/homebrew-git-pull-request/master/git-pull-request.rb
+    $ brew install pcl/git-pull-request/git-pull-request
 
 If you're using Windows or Linux, download the `git-pr`
 [script](https://raw.githubusercontent.com/pcl/git-pull-request/master/git-pr)
