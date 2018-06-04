@@ -339,7 +339,8 @@ should create a fork? You can do this with the 'hub' CLI tool:
         pr_number = args.pr_number
         local_branch = 'pr-%d' % pr_number
         
-        branches = str(check_output(['git', 'branch', '--format=%(refname:short)']), 'utf-8').split('\n')
+        # strip the first two chars since we can't rely on 'git branch --format'
+        branches = [x[2:] for x in str(check_output(['git', 'branch']), 'utf-8').split('\n')]
         if local_branch in branches:
             print("You already have a local branch called %s!" % local_branch)
             return -1
