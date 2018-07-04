@@ -140,14 +140,17 @@ should create a fork? You can do this with the 'hub' CLI tool:
         else:
             pr_number = response_json['number']
 
-        status = 0
-        if (not self.interactive) or self.ask("PR %d created! Add a reviewer? [Y|n] " % pr_number):
-            status = self.assign_pr(pr_number, reviewer)
-
-        if self.interactive and self.ask("Open in a browser? [Y|n] "):
-            self.open_url(response_json['html_url'])
-
-        return status
+        if reviewer != None: # A reviewer was provided on the command line; use it.
+            print("Created PR %d." % pr_number)
+            return self.assign_pr(pr_number, reviewer)
+        elif (not self.interactive): # Non-interactive and no command-line assignment; we're done.
+            print("Created PR %d." % pr_number)
+            return 0
+        else: # interactive mode, and no reviewer. Ask for details.
+            if self.ask("Created PR %d. Add a reviewer? [Y|n] " % pr_number):
+                return self.assign_pr(pr_number, reviewer)
+            else:
+                return 0
 
     def do_assign(self, args):
         config_status = self.configure()
@@ -193,7 +196,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
         boolean_response = input(msg)
         return boolean_response == '' or boolean_response == 'y' or boolean_response == 'Y'
 
-    def do_create(self):
+    def do_create(self, args):
         config_status = self.configure()
         if config_status != 0:
             return config_status
@@ -208,7 +211,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
             if len(candidate_shas) > 0:
                 candidate_branch = re.match(r".*\trefs/heads/(.*)$", candidate_shas[0])[1]
                 # TODO instead of short-circuiting, perhaps look at all remotes and prompt if multiple?
-                return self.create_pr(remote, candidate_branch, None)
+                return self.create_pr(remote, candidate_branch, args.reviewer)
 
         print("No changes found in the local repo!")
         return -1
@@ -389,21 +392,23 @@ should create a fork? You can do this with the 'hub' CLI tool:
 
 def main(args):
     parser = argparse.ArgumentParser(description='Manage GitHub pull requests without leaving your $SHELL')
+
     subparsers = parser.add_subparsers()
 
     parser_help = subparsers.add_parser('help')
-    parser_help.set_defaults(func=lambda args: parser.print_help())
+    parser_help.set_defaults(func=lambda prc, args: parser.print_help())
 
     parser_create = subparsers.add_parser('create', help='Create a new PR for the current branch')
-    parser_create.set_defaults(func=lambda args: PullRequestController().do_create())
+    parser_create.set_defaults(func=lambda prc, args: prc.do_create(args))
+    parser_create.add_argument('-r', '--reviewer', dest='reviewer', type=str, nargs='?', default=None)
     
     parser_assign = subparsers.add_parser('assign', help='Assign a PR to a reviewer')
-    parser_assign.set_defaults(func=lambda args: PullRequestController().do_assign(args))
+    parser_assign.set_defaults(func=lambda prc, args: prc.do_assign(args))
     parser_assign.add_argument('pr_number', metavar='pr-number', type=int)
     parser_assign.add_argument('reviewer', type=str, nargs="?")
     
     parser_list = subparsers.add_parser('list', help='List open PRs in the current origin repo')
-    parser_list.set_defaults(func=lambda args: PullRequestController().do_list(args))
+    parser_list.set_defaults(func=lambda prc, args: prc.do_list(args))
     parser_list.add_argument("filter", type=str, choices=[ "open", "subscribed" ],
                              default="subscribed", nargs='?',
                              help='A filter to apply to the PRs to list. Defaults to all open PRs'
@@ -411,29 +416,29 @@ def main(args):
 
     parser_browse = subparsers.add_parser('browse', 
         help='Open the specified PR in your browser, or the PR list page, if none is specified.')
-    parser_browse.set_defaults(func=lambda args: PullRequestController().do_browse(args))
+    parser_browse.set_defaults(func=lambda prc, args: prc.do_browse(args))
     parser_browse.add_argument('pr_number', metavar='pr-number', type=int, nargs='*', default=None)
 
     parser_checkout = subparsers.add_parser('checkout', help='Create a local tracking branch for a ' +
                                             'given PR, and check it out.')
-    parser_checkout.set_defaults(func=lambda args: PullRequestController().do_checkout(args))
+    parser_checkout.set_defaults(func=lambda prc, args: prc.do_checkout(args))
     parser_checkout.add_argument('pr_number', metavar='pr-number', type=int)
 
     parser_merge = subparsers.add_parser('merge', help="Merge the specified PR, using a merge commit.")
-    parser_merge.set_defaults(func=lambda args: PullRequestController().do_merge(args))
+    parser_merge.set_defaults(func=lambda prc, args: prc.do_merge(args))
     parser_merge.add_argument('pr_number', metavar='pr-number', type=int)
     parser_merge.add_argument('-d', '--delete-branch', dest='delete', action='store_true',
                               help="Delete the PR branch after successful merge")
 
     parser_set_token = subparsers.add_parser('set-token', help="Set the token for the current remote repository, optionally reading the token from stdin.")
-    parser_set_token.set_defaults(func=lambda args: PullRequestController().do_set_token(args))
+    parser_set_token.set_defaults(func=lambda prc, args: prc.do_set_token(args))
     parser_set_token.add_argument('token', type=str, nargs='?', default=None)
 
     args = parser.parse_args()
 
     # TODO move all the error logging here, instead of doing inline error prints
     if 'func' in args:
-        return args.func(args)
+        return args.func(PullRequestController(), args)
     else:
         parser.print_help()
         return -1
