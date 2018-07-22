@@ -80,15 +80,11 @@ Then, add it to your git config:
         if len(self.remotes) == 0:
             print("Coudn't find any remotes. Is this git repo configured yet?")
             return -1
-        elif len([r for r in self.remotes if r != 'origin']) == 0:
-                print('''Couldn't find any remotes other than origin. Perhaps you
-should create a fork? You can do this with the 'hub' CLI tool:
-    hub fork''')
 
         return 0
 
     def parse_remote(self, remote_name):
-        url = str(check_output(['git', 'config', '--get', 'remote.%s.url' % remote_name]), 'utf-8')
+        url = sh('git', 'config', '--get', 'remote.%s.url' % remote_name)
         return self.parse_remote_ssh_url(url)
 
     def parse_remote_ssh_url(self, remote_ssh_url):
@@ -107,35 +103,51 @@ should create a fork? You can do this with the 'hub' CLI tool:
     def graphq(self, graphql_query):
         json_query = { "query": graphql_query }
         response = self.session.post(self.graphql_api, data=json.dumps(json_query))
-        response_json = json.loads(response.content)
-        if 'errors' in response_json:
+        if 'errors' in response.json():
             raise Exception(response.content)
         else:
-            return response_json
+            return response.json()
 
     def pull_url(self):
         return "%s/repos/%s/%s/pulls" % (self.rest_api, self.origin_org, self.origin_repo)
 
     def create_pr(self, remote, branch, reviewer):
-        (_, remote_user, _) = self.parse_remote(remote)
-        remote_head = "%s:%s" % (remote_user, branch)
+        if remote == None:
+            (_, remote_user, _) = self.parse_remote(remote)
+            remote_head = "%s:%s" % (remote_user, branch)
+        else:
+            if remote == 'origin': # TODO support for repositories whose origin remote is not named 'origin'
+                remote_head = branch
+            else:
+                remote_head = "%s:%s" % (remote, branch)
 
-        title = str(check_output(['git', 'log', '-n', '1', '--format=format:%s']), 'utf-8').strip()
-        title = re.sub(r'"', '', title)
+        changes_vs_origin = sh('git', 'log', 'origin/master..@', '--format=format:%H').split('\n')
+        if len(changes_vs_origin) == 0:
+            print("Local branch contains no changes vs. origin/master!")
+            return -1
+        else:
+            # If there are multiple changes, let's assume the oldest one is the most interesting.
+            # TODO: ask the user which change to use if there are more than one.
+            change = changes_vs_origin[-1]
+
+        title = sh('git', 'show', '-q', change, '--format=format:%s')
+        body = sh('git', 'show', '-q', change, '--format=format:%b')
 
         try:
-            response = self.session.post(self.pull_url(), data='''{ 
-                "title": "%s", 
-                "head": "%s", 
+            response = self.session.post(self.pull_url(), data=json.dumps({ 
+                "title": title, 
+                "body": body,
+                "head": remote_head, 
                 "base": "master" 
-            }''' % (title, remote_head))
+            }))
         except Exception as ex:
             print("PR creation failed! Output: \n%s" % ex)
             return -1
 
-        response_json = json.loads(response.content)
+        response_json = response.json()
         if 'number' not in response_json:
-            print("PR creation failed! Output: \n%s" % response)
+            print("PR creation failed! Output: %s; Errors: \n%s" %
+                  (response_json['message'], response_json['errors']))
             return -1
         else:
             pr_number = response_json['number']
@@ -200,20 +212,31 @@ should create a fork? You can do this with the 'hub' CLI tool:
         config_status = self.configure()
         if config_status != 0:
             return config_status
-        
-        head_sha = str(check_output(['git', 'reflog', '-n', '1', '--format=format:%H']), 'utf-8').strip()
+
+        if args.remote != None and args.branch != None:
+            sh('git', 'push', args.remote, 'HEAD:refs/heads/%s' % args.branch)
+            return self.create_pr(args.remote, args.branch, args.reviewer)
+        elif args.branch == None:
+            print('''When specifying a remote, you must also provide a remote branch name:
+
+    git pr create <remote> <branch>''')
+            return -1
+
+        # A remote and branch wasn't specified. Look around to see if the current HEAD
+        # has already been pushed somewhere.
+        head_sha = sh('git', 'reflog', '-n', '1', '--format=format:%H')
         for remote in self.remotes:
-            if remote == 'origin' or remote == '':
-                continue
-            
-            lines = str(check_output(['git', 'ls-remote', '--heads', remote]), 'utf-8').split('\n')
+            lines = sh('git', 'ls-remote', '--heads', remote).split('\n')
             candidate_shas = [l for l in lines if head_sha in l]
             if len(candidate_shas) > 0:
                 candidate_branch = re.match(r".*\trefs/heads/(.*)$", candidate_shas[0])[1]
                 # TODO instead of short-circuiting, perhaps look at all remotes and prompt if multiple?
                 return self.create_pr(remote, candidate_branch, args.reviewer)
 
-        print("No changes found in the local repo!")
+        print('''The local branch hasn't been pushed to a remote branch. Please push first, 
+or provide remote and branch names: 
+
+    git pr create <remote> <branch>''')
         return -1
 
     def pulls_query(self):
@@ -271,7 +294,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
 
         def get_mergeable_state(pr_number):
             response = self.session.get('%s/%d' % (self.pull_url(), pr_number))
-            return json.loads(response.content)['mergeable_state']
+            return response.json()['mergeable_state']
         
         def status_from_mergeable_state(node, dirty_text):
             mergeable_state = get_mergeable_state(node['number'])
@@ -308,7 +331,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
 
     def open_url(self, url):
         # TODO open() for Linux, Windows.
-        check_output(['open', url])
+        sh('open', url)
         
     def do_browse(self, args):
         config_status = self.configure()
@@ -327,7 +350,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
     
     def fetch_checkout_branch_spec(self, pr_number):
         response = self.session.get('%s/%d' % (self.pull_url(), pr_number))
-        pr = json.loads(response.content)
+        pr = response.json()
         if 'head' not in pr: # the branch has been deleted
             return None
         else:
@@ -343,7 +366,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
         local_branch = 'pr-%d' % pr_number
         
         # strip the first two chars since we can't rely on 'git branch --format'
-        branches = [x[2:] for x in str(check_output(['git', 'branch']), 'utf-8').split('\n')]
+        branches = [x[2:] for x in sh('git', 'branch').split('\n')]
         if local_branch in branches:
             print("You already have a local branch called %s!" % local_branch)
             return -1
@@ -351,7 +374,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
         (repo_name, repo_url, remote_branch) = self.fetch_checkout_branch_spec(pr_number)
 
         if repo_name not in self.remotes: # TODO check if it's 'origin' or under a different name
-            check_output(['git', 'remote', 'add', repo_name, repo_url])
+            sh('git', 'remote', 'add', repo_name, repo_url)
             self.remotes.append(repo_name)
 
         call(['git', 'fetch', repo_name])
@@ -361,17 +384,20 @@ should create a fork? You can do this with the 'hub' CLI tool:
         config_status = self.configure()
         if config_status != 0:
             return config_status
+        pr_number = args.pr_number
 
-        merge_response = self.session.post('%s/%d/merge' % (self.pull_url(), args.pr_number))
-        if merge_response.status_code > 299:
-            print("Server responded with status code %d!" % merge_response.status_code)
-        merge_result = json.loads(merge_response.content)
+        merge_response = self.session.put('%s/%d/merge' % (self.pull_url(), pr_number))
+        merge_result = merge_response.json()
         print(merge_result.message)
-
-        if merge_response.status_code <= 299:
+        if merge_response.status_code > 299:
+            if merge_response.status_code == 405:
+                print("Ensure that your repository allows the 'merge' method for the merge button")
+            print("")
+            print("To view the PR: 'git pr browse %d'" % pr_number)
+        else:
             if args.delete or self.interactive and ask("Delete PR branch? [Y|n]: "):
                 pr_response = self.session.get(self.pull_url())
-                pr = json.loads(pr_response.content)
+                pr = pr_response.json()
                 if 'head' in pr: # perhaps the branch has already been deleted
                     branchname = pr['head']['ref']
                     repo_url = pr['head']['url']
@@ -388,8 +414,11 @@ should create a fork? You can do this with the 'hub' CLI tool:
             token = args.token
 
         run(['git', 'config', '--unset-all', 'git-pr.%s.token' % host])
-        check_output(['git', 'config', '--global', '--add', 'git-pr.%s.token' % host, token])
+        sh('git', 'config', '--global', '--add', 'git-pr.%s.token' % host, token)
 
+def sh(*args):
+    return str(check_output(args), 'utf-8').strip()
+        
 def main(args):
     parser = argparse.ArgumentParser(description='Manage GitHub pull requests without leaving your $SHELL')
 
@@ -398,9 +427,15 @@ def main(args):
     parser_help = subparsers.add_parser('help')
     parser_help.set_defaults(func=lambda prc, args: parser.print_help())
 
-    parser_create = subparsers.add_parser('create', help='Create a new PR for the current branch')
+    parser_create = subparsers.add_parser('create', help='Create a new PR. Push HEAD to the specified '
+                                          + 'remote and branch, if provided. Otherwise, if HEAD has already '
+                                          + 'been pushed remotely, use that as the PR head')
     parser_create.set_defaults(func=lambda prc, args: prc.do_create(args))
     parser_create.add_argument('-r', '--reviewer', dest='reviewer', type=str, nargs='?', default=None)
+    parser_create.add_argument('remote', type=str, nargs='?', help='The remote to push HEAD to. If specified,'
+                               + " 'branch' must also be provided.")
+    parser_create.add_argument('branch', type=str, nargs='?', help='The name of the branch to create at '
+                               + 'the specified remote.')
     
     parser_assign = subparsers.add_parser('assign', help='Assign a PR to a reviewer')
     parser_assign.set_defaults(func=lambda prc, args: prc.do_assign(args))

@@ -35,8 +35,7 @@ and put it somewhere in your path.
 
     $ <make changes with $EDITOR>
     $ git commit -m "awesomeness here"
-    $ git push $USER HEAD:awesomeness
-    $ git pr create
+    $ git pr create $USER awesomeness
 
 
 ## Requirements and Limitations
