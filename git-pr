@@ -408,8 +408,11 @@ or provide remote and branch names:
                 pr = pr_response.json()
                 if 'head' in pr: # perhaps the branch has already been deleted
                     branchname = pr['head']['ref']
-                    repo_url = pr['head']['url']
+                    repo_url = pr['head']['repo']['url']
                     self.session.delete("%s/git/refs/heads/%s" % (repo_url, branchname))
+                else:
+                    print("""Error: didn't find the expected data in the PR output! To delete this PR, open
+the PR in your browser: 'git pr browse %d'""" % pr_number)
 
     def do_set_token(self, args):
         (host, _, _) = self.parse_remote('origin')
