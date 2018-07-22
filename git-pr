@@ -103,11 +103,10 @@ Then, add it to your git config:
     def graphq(self, graphql_query):
         json_query = { "query": graphql_query }
         response = self.session.post(self.graphql_api, data=json.dumps(json_query))
-        response_json = json.loads(response.content)
-        if 'errors' in response_json:
+        if 'errors' in response.json():
             raise Exception(response.content)
         else:
-            return response_json
+            return response.json()
 
     def pull_url(self):
         return "%s/repos/%s/%s/pulls" % (self.rest_api, self.origin_org, self.origin_repo)
@@ -145,9 +144,10 @@ Then, add it to your git config:
             print("PR creation failed! Output: \n%s" % ex)
             return -1
 
-        response_json = json.loads(response.content)
+        response_json = response.json()
         if 'number' not in response_json:
-            print("PR creation failed! Output: \n%s" % response)
+            print("PR creation failed! Output: %s; Errors: \n%s" %
+                  (response_json['message'], response_json['errors']))
             return -1
         else:
             pr_number = response_json['number']
@@ -294,7 +294,7 @@ or provide remote and branch names:
 
         def get_mergeable_state(pr_number):
             response = self.session.get('%s/%d' % (self.pull_url(), pr_number))
-            return json.loads(response.content)['mergeable_state']
+            return response.json()['mergeable_state']
         
         def status_from_mergeable_state(node, dirty_text):
             mergeable_state = get_mergeable_state(node['number'])
@@ -350,7 +350,7 @@ or provide remote and branch names:
     
     def fetch_checkout_branch_spec(self, pr_number):
         response = self.session.get('%s/%d' % (self.pull_url(), pr_number))
-        pr = json.loads(response.content)
+        pr = response.json()
         if 'head' not in pr: # the branch has been deleted
             return None
         else:
@@ -387,7 +387,7 @@ or provide remote and branch names:
         pr_number = args.pr_number
 
         merge_response = self.session.put('%s/%d/merge' % (self.pull_url(), pr_number))
-        merge_result = json.loads(merge_response.content)
+        merge_result = merge_response.json()
         print(merge_result.message)
         if merge_response.status_code > 299:
             if merge_response.status_code == 405:
@@ -397,7 +397,7 @@ or provide remote and branch names:
         else:
             if args.delete or self.interactive and ask("Delete PR branch? [Y|n]: "):
                 pr_response = self.session.get(self.pull_url())
-                pr = json.loads(pr_response.content)
+                pr = pr_response.json()
                 if 'head' in pr: # perhaps the branch has already been deleted
                     branchname = pr['head']['ref']
                     repo_url = pr['head']['url']
