@@ -392,7 +392,7 @@ or provide remote and branch names:
 
         merge_response = self.session.put('%s/%d/merge' % (self.pull_url(), pr_number))
         merge_result = merge_response.json()
-        print(merge_result.message)
+        print(merge_result['message'])
         if merge_response.status_code > 299:
             if merge_response.status_code == 405:
                 print("Ensure that your repository allows the 'merge' method for the merge button")
