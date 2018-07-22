@@ -399,7 +399,7 @@ or provide remote and branch names:
             print("")
             print("To view the PR: 'git pr browse %d'" % pr_number)
         else:
-            if args.delete or self.interactive and ask("Delete PR branch? [Y|n]: "):
+            if args.delete or self.interactive and self.ask("Delete PR branch? [Y|n]: "):
                 pr_response = self.session.get(self.pull_url())
                 pr = pr_response.json()
                 if 'head' in pr: # perhaps the branch has already been deleted
