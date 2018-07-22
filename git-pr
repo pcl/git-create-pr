@@ -88,7 +88,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
         return 0
 
     def parse_remote(self, remote_name):
-        url = str(check_output(['git', 'config', '--get', 'remote.%s.url' % remote_name]), 'utf-8')
+        url = sh('git', 'config', '--get', 'remote.%s.url' % remote_name)
         return self.parse_remote_ssh_url(url)
 
     def parse_remote_ssh_url(self, remote_ssh_url):
@@ -120,8 +120,8 @@ should create a fork? You can do this with the 'hub' CLI tool:
         (_, remote_user, _) = self.parse_remote(remote)
         remote_head = "%s:%s" % (remote_user, branch)
 
-        title = str(check_output(['git', 'log', '-n', '1', '--format=format:%s']), 'utf-8').strip()
-        body = str(check_output(['git', 'log', '-n', '1', '--format=format:%b']), 'utf-8').strip()
+        title = sh('git', 'log', '-n', '1', '--format=format:%s')
+        body = sh('git', 'log', '-n', '1', '--format=format:%b')
 
         try:
             response = self.session.post(self.pull_url(), data=json.dumps({ 
@@ -202,12 +202,12 @@ should create a fork? You can do this with the 'hub' CLI tool:
         if config_status != 0:
             return config_status
         
-        head_sha = str(check_output(['git', 'reflog', '-n', '1', '--format=format:%H']), 'utf-8').strip()
+        head_sha = sh('git', 'reflog', '-n', '1', '--format=format:%H')
         for remote in self.remotes:
             if remote == 'origin' or remote == '':
                 continue
             
-            lines = str(check_output(['git', 'ls-remote', '--heads', remote]), 'utf-8').split('\n')
+            lines = sh('git', 'ls-remote', '--heads', remote).split('\n')
             candidate_shas = [l for l in lines if head_sha in l]
             if len(candidate_shas) > 0:
                 candidate_branch = re.match(r".*\trefs/heads/(.*)$", candidate_shas[0])[1]
@@ -309,7 +309,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
 
     def open_url(self, url):
         # TODO open() for Linux, Windows.
-        check_output(['open', url])
+        sh('open', url)
         
     def do_browse(self, args):
         config_status = self.configure()
@@ -344,7 +344,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
         local_branch = 'pr-%d' % pr_number
         
         # strip the first two chars since we can't rely on 'git branch --format'
-        branches = [x[2:] for x in str(check_output(['git', 'branch']), 'utf-8').split('\n')]
+        branches = [x[2:] for x in sh('git', 'branch').split('\n')]
         if local_branch in branches:
             print("You already have a local branch called %s!" % local_branch)
             return -1
@@ -352,7 +352,7 @@ should create a fork? You can do this with the 'hub' CLI tool:
         (repo_name, repo_url, remote_branch) = self.fetch_checkout_branch_spec(pr_number)
 
         if repo_name not in self.remotes: # TODO check if it's 'origin' or under a different name
-            check_output(['git', 'remote', 'add', repo_name, repo_url])
+            sh('git', 'remote', 'add', repo_name, repo_url)
             self.remotes.append(repo_name)
 
         call(['git', 'fetch', repo_name])
@@ -392,8 +392,11 @@ should create a fork? You can do this with the 'hub' CLI tool:
             token = args.token
 
         run(['git', 'config', '--unset-all', 'git-pr.%s.token' % host])
-        check_output(['git', 'config', '--global', '--add', 'git-pr.%s.token' % host, token])
+        sh('git', 'config', '--global', '--add', 'git-pr.%s.token' % host, token)
 
+def sh(*args):
+    return str(check_output(args), 'utf-8').strip()
+        
 def main(args):
     parser = argparse.ArgumentParser(description='Manage GitHub pull requests without leaving your $SHELL')
 
