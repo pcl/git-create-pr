@@ -120,8 +120,17 @@ should create a fork? You can do this with the 'hub' CLI tool:
         (_, remote_user, _) = self.parse_remote(remote)
         remote_head = "%s:%s" % (remote_user, branch)
 
-        title = sh('git', 'log', '-n', '1', '--format=format:%s')
-        body = sh('git', 'log', '-n', '1', '--format=format:%b')
+        changes_vs_origin = sh('git', 'log', 'origin/master..@', '--format=format:%H').split('\n')
+        if len(changes_vs_origin) == 0:
+            print("Local branch contains no changes vs. origin/master!")
+            return -1
+        else:
+            # If there are multiple changes, let's assume the oldest one is the most interesting.
+            # TODO: ask the user which change to use if there are more than one.
+            change = changes_vs_origin[-1]
+
+        title = sh('git', 'show', '-q', change, '--format=format:%s')
+        body = sh('git', 'show', '-q', change, '--format=format:%b')
 
         try:
             response = self.session.post(self.pull_url(), data=json.dumps({ 
