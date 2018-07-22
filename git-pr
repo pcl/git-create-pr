@@ -121,14 +121,15 @@ should create a fork? You can do this with the 'hub' CLI tool:
         remote_head = "%s:%s" % (remote_user, branch)
 
         title = str(check_output(['git', 'log', '-n', '1', '--format=format:%s']), 'utf-8').strip()
-        title = re.sub(r'"', '', title)
+        body = str(check_output(['git', 'log', '-n', '1', '--format=format:%b']), 'utf-8').strip()
 
         try:
-            response = self.session.post(self.pull_url(), data='''{ 
-                "title": "%s", 
-                "head": "%s", 
+            response = self.session.post(self.pull_url(), data=json.dumps({ 
+                "title": title, 
+                "body": body,
+                "head": remote_head, 
                 "base": "master" 
-            }''' % (title, remote_head))
+            }))
         except Exception as ex:
             print("PR creation failed! Output: \n%s" % ex)
             return -1
