@@ -410,6 +410,9 @@ or provide remote and branch names:
                     branchname = pr['head']['ref']
                     repo_url = pr['head']['repo']['url']
                     self.session.delete("%s/git/refs/heads/%s" % (repo_url, branchname))
+                    sh('git', 'fetch', 'origin')
+                    sh('git', 'remote', 'prune', 'origin')
+                    # TODO fetch and prune the user's fork, too
                 else:
                     print("""Error: didn't find the expected data in the PR output! To delete this PR, open
 the PR in your browser: 'git pr browse %d'""" % pr_number)
