@@ -80,10 +80,6 @@ Then, add it to your git config:
         if len(self.remotes) == 0:
             print("Coudn't find any remotes. Is this git repo configured yet?")
             return -1
-        elif len([r for r in self.remotes if r != 'origin']) == 0:
-                print('''Couldn't find any remotes other than origin. Perhaps you
-should create a fork? You can do this with the 'hub' CLI tool:
-    hub fork''')
 
         return 0
 
