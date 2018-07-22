@@ -209,9 +209,6 @@ Then, add it to your git config:
         
         head_sha = sh('git', 'reflog', '-n', '1', '--format=format:%H')
         for remote in self.remotes:
-            if remote == 'origin' or remote == '':
-                continue
-            
             lines = sh('git', 'ls-remote', '--heads', remote).split('\n')
             candidate_shas = [l for l in lines if head_sha in l]
             if len(candidate_shas) > 0:
