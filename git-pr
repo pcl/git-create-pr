@@ -113,8 +113,14 @@ Then, add it to your git config:
         return "%s/repos/%s/%s/pulls" % (self.rest_api, self.origin_org, self.origin_repo)
 
     def create_pr(self, remote, branch, reviewer):
-        (_, remote_user, _) = self.parse_remote(remote)
-        remote_head = "%s:%s" % (remote_user, branch)
+        if remote == None:
+            (_, remote_user, _) = self.parse_remote(remote)
+            remote_head = "%s:%s" % (remote_user, branch)
+        else:
+            if remote == 'origin': # TODO support for repositories whose origin remote is not named 'origin'
+                remote_head = branch
+            else:
+                remote_head = "%s:%s" % (remote, branch)
 
         changes_vs_origin = sh('git', 'log', 'origin/master..@', '--format=format:%H').split('\n')
         if len(changes_vs_origin) == 0:
@@ -206,7 +212,18 @@ Then, add it to your git config:
         config_status = self.configure()
         if config_status != 0:
             return config_status
-        
+
+        if args.remote != None and args.branch != None:
+            sh('git', 'push', args.remote, 'HEAD:refs/heads/%s' % args.branch)
+            return self.create_pr(args.remote, args.branch, args.reviewer)
+        elif args.branch == None:
+            print('''When specifying a remote, you must also provide a remote branch name:
+
+    git pr create <remote> <branch>''')
+            return -1
+
+        # A remote and branch wasn't specified. Look around to see if the current HEAD
+        # has already been pushed somewhere.
         head_sha = sh('git', 'reflog', '-n', '1', '--format=format:%H')
         for remote in self.remotes:
             lines = sh('git', 'ls-remote', '--heads', remote).split('\n')
@@ -216,7 +233,10 @@ Then, add it to your git config:
                 # TODO instead of short-circuiting, perhaps look at all remotes and prompt if multiple?
                 return self.create_pr(remote, candidate_branch, args.reviewer)
 
-        print("No changes found in the local repo!")
+        print('''The local branch hasn't been pushed to a remote branch. Please push first, 
+or provide remote and branch names: 
+
+    git pr create <remote> <branch>''')
         return -1
 
     def pulls_query(self):
@@ -407,9 +427,15 @@ def main(args):
     parser_help = subparsers.add_parser('help')
     parser_help.set_defaults(func=lambda prc, args: parser.print_help())
 
-    parser_create = subparsers.add_parser('create', help='Create a new PR for the current branch')
+    parser_create = subparsers.add_parser('create', help='Create a new PR. Push HEAD to the specified '
+                                          + 'remote and branch, if provided. Otherwise, if HEAD has already '
+                                          + 'been pushed remotely, use that as the PR head')
     parser_create.set_defaults(func=lambda prc, args: prc.do_create(args))
     parser_create.add_argument('-r', '--reviewer', dest='reviewer', type=str, nargs='?', default=None)
+    parser_create.add_argument('remote', type=str, nargs='?', help='The remote to push HEAD to. If specified,'
+                               + " 'branch' must also be provided.")
+    parser_create.add_argument('branch', type=str, nargs='?', help='The name of the branch to create at '
+                               + 'the specified remote.')
     
     parser_assign = subparsers.add_parser('assign', help='Assign a PR to a reviewer')
     parser_assign.set_defaults(func=lambda prc, args: prc.do_assign(args))
