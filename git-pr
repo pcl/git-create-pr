@@ -361,14 +361,17 @@ should create a fork? You can do this with the 'hub' CLI tool:
         config_status = self.configure()
         if config_status != 0:
             return config_status
+        pr_number = args.pr_number
 
-        merge_response = self.session.post('%s/%d/merge' % (self.pull_url(), args.pr_number))
-        if merge_response.status_code > 299:
-            print("Server responded with status code %d!" % merge_response.status_code)
+        merge_response = self.session.put('%s/%d/merge' % (self.pull_url(), pr_number))
         merge_result = json.loads(merge_response.content)
         print(merge_result.message)
-
-        if merge_response.status_code <= 299:
+        if merge_response.status_code > 299:
+            if merge_response.status_code == 405:
+                print("Ensure that your repository allows the 'merge' method for the merge button")
+            print("")
+            print("To view the PR: 'git pr browse %d'" % pr_number)
+        else:
             if args.delete or self.interactive and ask("Delete PR branch? [Y|n]: "):
                 pr_response = self.session.get(self.pull_url())
                 pr = json.loads(pr_response.content)
