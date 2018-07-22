@@ -276,21 +276,25 @@ or provide remote and branch names:
         def status(node):
             # TODO include merge review requirements in this
             mergeable = node['mergeable'] == 'MERGEABLE'
-            check_results = node['commits']['edges'][0]['node']['commit']['status']['state'].lower()
-            if check_results == "success":
-                if mergeable:
-                    return status_from_mergeable_state(node, "? attention required")
+            commit_status = node['commits']['edges'][0]['node']['commit']['status']
+            if commit_status != None:
+                check_results = commit_status['state'].lower()
+                if check_results == "success":
+                    if mergeable:
+                        return status_from_mergeable_state(node, "? attention required")
+                    else:
+                        return "⨯ merge conflict"
+                elif check_results == "pending":
+                    if mergeable:
+                        return status_from_mergeable_state(node, "? checks pending")
+                    else:
+                        return "⨯ merge conflict; checks pending"
+                elif check_results == "failure":
+                    return "⨯ checks failed"
                 else:
-                    return "⨯ merge conflict"
-            elif check_results == "pending":
-                if mergeable:
-                    return status_from_mergeable_state(node, "? checks pending")
-                else:
-                    return "⨯ merge conflict; checks pending"
-            elif check_results == "failure":
-                return "⨯ checks failed"
+                    return "⨯ unknown check result: " + check_results
             else:
-                return "⨯ unknown check result: " + check_results
+                return "? commit status unavailable"
 
         def get_mergeable_state(pr_number):
             response = self.session.get('%s/%d' % (self.pull_url(), pr_number))
