@@ -25,7 +25,6 @@ the origin repository.
 
 The easiest way to install `git pr` on a Mac is to use `brew`:
 
-    $ pip3 install requests responses tabulate # Workaround for https://github.com/Homebrew/homebrew-core/issues/30473
     $ brew install pcl/git-pull-request/git-pull-request
 
 If you're using Windows or Linux, download the `git-pr`
