@@ -31,11 +31,31 @@ If you're using Windows or Linux, download the `git-pr`
 [script](https://raw.githubusercontent.com/pcl/git-pull-request/master/git-pr)
 and put it somewhere in your path.
 
+
 ## Usage
 
+### Push a change to a new pull request
+
     $ <make changes with $EDITOR>
-    $ git commit -m "awesomeness here"
-    $ git pr create $USER awesomeness
+    $ git commit -m "Add some examples to the docs"
+    $ git pr push fred doc-examples
+    
+### List all open PRs in the current repository
+
+    $ git pr list open
+      PR  Author    Status             Title
+    ----  ------  -----------------  ------------------------------------------------------------------------
+     576  fred    awaiting review    Add some examples to the docs
+     575  barney  ⨯ merge conflict   Update Spring version
+     551  wilma   ✔ ready to merge   Fix memory leak
+
+### Check out a PR locally
+
+    $ git pr checkout 576
+    remote: Counting objects: 680, done.
+    ...
+    Branch 'pr-576' set up to track remote branch 'doc-examples' from 'foo'.
+    Switched to a new branch 'pr-576'
 
 
 ## Requirements and Limitations
@@ -52,7 +72,7 @@ URLs conform to the `git@...` protocol format.
 Contributions are welcome! I suggest that you create a PR if you've got
 any improvements. 
 
-See the [issues list](https://github.com/pcl/git-create-pr/issues) if 
+See the [issues list](https://github.com/pcl/git-pull-request/issues) if 
 you're looking for inspiration.
 
 
