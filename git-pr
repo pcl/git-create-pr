@@ -225,7 +225,10 @@ Then, add it to your git config:
             return config_status
 
         if args.remote != None and args.branch != None:
-            sh('git', 'push', args.remote, 'HEAD:refs/heads/%s' % args.branch)
+            if args.force:
+                sh('git', 'push', '-f', args.remote, 'HEAD:refs/heads/%s' % args.branch)
+            else:
+                sh('git', 'push', args.remote, 'HEAD:refs/heads/%s' % args.branch)
             return self.create_pr(args.remote, args.branch, args.reviewer)
         elif args.branch == None:
             print('''When specifying a remote, you must also provide a remote branch name:
@@ -453,6 +456,7 @@ def main(args):
                                           + 'remote and branch, if provided. Otherwise, push to the tracking '
                                           + 'branch, if configured.')
     parser_push.set_defaults(func=lambda prc, args: prc.do_push(args))
+    parser_push.add_argument('-f', '--force', dest='force', action='store_true', default=False)
     parser_push.add_argument('-r', '--reviewer', dest='reviewer', type=str, nargs='?', default=None)
     parser_push.add_argument('remote', type=str, nargs='?', help='The remote to push HEAD to. If specified,'
                                + " 'branch' must also be provided.")
