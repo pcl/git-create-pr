@@ -57,6 +57,17 @@ class PullRequestController:
     def configure(self):
         (host, self.origin_org, self.origin_repo) = self.parse_remote('origin')
 
+        if self.configure_for_host(host) != 0:
+            return -1
+        
+        self.remotes = [r for r in str(check_output(['git', 'remote']), 'utf-8').split('\n') if r != '']
+        if len(self.remotes) == 0:
+            print("Coudn't find any remotes. Is this git repo configured yet?")
+            return -1
+
+        return 0
+
+    def configure_for_host(self, host):
         result = run(['git', 'config', '--get', 'git-pr.%s.token' % host], stdout=PIPE)
         if result.returncode != 0:
             print('''A GitHub token must be provided. Generate one on GitHub:
@@ -70,26 +81,25 @@ Then, add it to your git config:
 
         auth_token = str(result.stdout, 'utf-8').strip()
 
+        self.host = host
         self.session = requests.Session()
         self.session.headers.update({ "Authorization": "token %s" % auth_token })
 
         # GitHub Enterprise deployments host the API at <server>/api; GitHub itself
         # hosts the API at <api.github.com>
-        if host == 'github.com':
-            self.rest_api = 'https://api.github.com'
+        if self.host == 'github.com':
             self.graphql_api = 'https://api.github.com/graphql'
             self.web_url = 'https://github.com'
         else:
-            self.rest_api = 'https://' + host + "/api/v3"
-            self.graphql_api = 'https://' + host + '/api/graphql'
-            self.web_url = 'https://' + host
-        
-        self.remotes = [r for r in str(check_output(['git', 'remote']), 'utf-8').split('\n') if r != '']
-        if len(self.remotes) == 0:
-            print("Coudn't find any remotes. Is this git repo configured yet?")
-            return -1
-
+            self.graphql_api = 'https://' + self.host + '/api/graphql'
+            self.web_url = 'https://' + self.host
         return 0
+
+    def rest_api(self, host):
+        if host == 'github.com':
+            return 'https://api.github.com'
+        else:
+            return 'https://%s/api/v3' % host
 
     def parse_remote(self, remote_name):
         url = sh('git', 'config', '--get', 'remote.%s.url' % remote_name)
@@ -117,7 +127,7 @@ Then, add it to your git config:
             return response.json()
 
     def pulls_url(self):
-        return "%s/repos/%s/%s/pulls" % (self.rest_api, self.origin_org, self.origin_repo)
+        return "%s/repos/%s/%s/pulls" % (self.rest_api(self.host), self.origin_org, self.origin_repo)
 
     def pull_url(self, pr_number):
         return "%s/%d" % (self.pulls_url(), pr_number)
@@ -253,13 +263,15 @@ or provide remote and branch names:
     git pr push <remote> <branch>''')
         return -1
 
-    def pulls_query(self):
+    def pulls_query(self, field):
         # TODO first or last? Sort order? Paginate, or at least indicate incompleteness!
+        # TODO use mergeStateStatus when communicating with public GitHub / upgraded prem deployments
         return '''query {
-            repository(owner: "%s", name: "%s") {
+            %s {
                 pullRequests(last: 30, states: OPEN) {
                     nodes() { 
                         number,
+                        repository { nameWithOwner },
                         title,
                         mergeable, 
                         viewerDidAuthor,
@@ -277,16 +289,40 @@ or provide remote and branch names:
                     }
                 }
             }
-        }''' % (self.origin_org, self.origin_repo)
+        }''' % field
+
+    def all_hosts(self):
+        entries = sh('git', 'config', '--list').split('\n')
+        pattern = '^git-pr\.(.*)\.token=.*$'
+        return [ re.search(pattern, e).group(1) for e in entries if re.match(pattern, e) ]
 
     def do_list(self, args):
         # TODO indicate the PR for the current branch, if any
         config_status = self.configure()
         if config_status != 0:
             return config_status
-        
-        response = self.graphq(self.pulls_query())
 
+        pr_count = 0
+        if args._global:
+            # iterate over all the configured servers
+            for host in self.all_hosts():
+                self.configure_for_host(host)
+                response = self.graphq(self.pulls_query("viewer"))
+                pr_count += self.print_list(response['data']['viewer'], True, host, args)
+        else:
+            response = self.graphq(
+                self.pulls_query('repository(owner: "%s", name: "%s")' % (self.origin_org, self.origin_repo)))
+            pr_count = self.print_list(response['data']['repository'], False, self.host, args)
+
+        if pr_count > 0:
+            print("  To view a PR on the web:                         git pr browse <pr-no>")
+            print("  To merge a PR in the 'ready to merge' state:     git pr merge <pr-no>")
+            print("  To create a local tracking branch for a PR:      git pr checkout <pr-no>")
+        else:
+            print("You don't have any %s PRs! Time to write some code." % args.filter)
+        return 0
+
+    def print_list(self, pr_list, print_repo_info, host, args):
         def status(node):
             # TODO include merge review requirements in this
             mergeable = node['mergeable'] == 'MERGEABLE'
@@ -310,12 +346,13 @@ or provide remote and branch names:
             else:
                 return "? commit status unavailable"
 
-        def get_mergeable_state(pr_number):
-            response = self.session.get(self.pull_url(pr_number))
+        def get_mergeable_state(node):
+            response = self.session.get("%s/repos/%s/pulls/%d" %
+                                        (self.rest_api(host), node['repository']['nameWithOwner'], node['number']))
             return response.json()['mergeable_state']
         
         def status_from_mergeable_state(node, dirty_text):
-            mergeable_state = get_mergeable_state(node['number'])
+            mergeable_state = get_mergeable_state(node)
             if mergeable_state == 'behind':
                 return "⨯ out-of-date"
             elif mergeable_state == "blocked":
@@ -335,20 +372,24 @@ or provide remote and branch names:
             else:
                 return node['viewerDidAuthor'] or node['viewerSubscription'] == 'SUBSCRIBED'
 
-        nodes = [ (n['number'], n['author']['login'], status(n), n['title'])
-                  for n in response['data']['repository']['pullRequests']['nodes'] if filter(n) ]
+        if print_repo_info:
+            nodes = [ (host, n['repository']['nameWithOwner'], n['number'], n['author']['login'], status(n), n['title'])
+                      for n in pr_list['pullRequests']['nodes'] if filter(n) ]
+        else:
+            nodes = [ (n['number'], n['author']['login'], status(n), n['title'])
+                      for n in pr_list['pullRequests']['nodes'] if filter(n) ]
+            
         nodes.reverse()
 
         if len(nodes) > 0:
-            print(tabulate.tabulate(nodes, headers=['PR', 'Author', 'Status', 'Title']))
+            columns = ['PR', 'Author', 'Status', 'Title']
+            if print_repo_info:
+                columns.insert(0, 'Site')
+                columns.insert(1, 'Repository')
+            print(tabulate.tabulate(nodes, headers=columns))
             print()
-            print("  To view a PR on the web:                         git pr browse <pr-no>")
-            print("  To merge a PR in the 'ready to merge' state:     git pr merge <pr-no>")
-            print("  To create a local tracking branch for a PR:      git pr checkout <pr-no>")
-        else:
-            print("You don't have any %s PRs! Time to write some code." % args.filter)
-        return 0
-
+        return len(nodes)
+        
     def open_url(self, url):
         # TODO open() for Linux, Windows.
         sh('open', url)
@@ -472,6 +513,7 @@ def main(args):
     
     parser_list = subparsers.add_parser('list', help='List open PRs in the current origin repo')
     parser_list.set_defaults(func=lambda prc, args: prc.do_list(args))
+    parser_list.add_argument('-g', '--global', dest='_global', action='store_true', default=False)
     parser_list.add_argument("filter", type=str, choices=[ "open", "subscribed" ],
                              default="subscribed", nargs='?',
                              help='A filter to apply to the PRs to list. Defaults to all open PRs'
