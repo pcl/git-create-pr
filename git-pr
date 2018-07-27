@@ -67,6 +67,16 @@ class PullRequestController:
 
         return 0
 
+    def configure_for_pr_spec(self, pr_spec):
+        if len(pr_spec) == 1:
+            return (self.configure(), int(pr_spec[0]))
+        elif len(pr_spec) == 3 and '/' in pr_spec[1]:
+            (self.origin_org, self.origin_repo) = pr_spec[1].split('/')
+            return (self.configure_for_host(pr_spec[0]), int(pr_spec[2]))
+        else:
+            print("pr-spec must be a single PR number or three elements like so: 'github.com pcl/git-pull-request 6'")
+            return (-1, None)
+
     def configure_for_host(self, host):
         result = run(['git', 'config', '--get', 'git-pr.%s.token' % host], stdout=PIPE)
         if result.returncode != 0:
@@ -186,11 +196,11 @@ Then, add it to your git config:
                 return 0
 
     def do_assign(self, args):
-        config_status = self.configure()
+        config_status, pr_number = self.configure_for_pr_spec(args.pr_spec)
         if config_status != 0:
             return config_status
         else:
-            return self.assign_pr(args.pr_number, args.reviewer)
+            return self.assign_pr(pr_number, args.reviewer)
     
     def assign_pr(self, pr_number, reviewer):
         if reviewer == None and not self.interactive:
@@ -304,7 +314,9 @@ or provide remote and branch names:
 
         pr_count = 0
         if args._global:
-            # iterate over all the configured servers
+            # iterate over all the configured servers. This is kinda ugly, since we reset internal
+            # state as we iterate. We should move the various 'do_*()' functions (or at least this one)
+            # out of prc, and create new prc instances as needed.
             for host in self.all_hosts():
                 self.configure_for_host(host)
                 response = self.graphq(self.pulls_query("viewer"))
@@ -395,17 +407,20 @@ or provide remote and branch names:
         sh('open', url)
         
     def do_browse(self, args):
-        config_status = self.configure()
+        if args.pr_spec:
+            config_status, pr_number = self.configure_for_pr_spec(args.pr_spec)
+        else:
+            config_status = self.configure()
+            pr_number = None
         if config_status != 0:
             return config_status
 
         def open_subpath(subpath):
             self.open_url('%s/%s/%s/%s' % (self.web_url, self.origin_org, self.origin_repo, subpath))
 
-        if args.pr_number != None and len(args.pr_number) > 0:
-            for number in args.pr_number:
-                pr = 'pull/%d' % number
-                open_subpath(pr)
+        if pr_number != None:
+            pr = 'pull/%d' % pr_number
+            open_subpath(pr)
         else:
             open_subpath('pulls')
     
@@ -442,10 +457,9 @@ or provide remote and branch names:
         call(['git', 'checkout', '-b', local_branch, '%s/%s' % (repo_name, remote_branch) ])
 
     def do_merge(self, args):
-        config_status = self.configure()
+        config_status, pr_number = self.configure_for_pr_spec(args.pr_spec)
         if config_status != 0:
             return config_status
-        pr_number = args.pr_number
 
         pull_url = self.pull_url(pr_number)
         merge_response = self.session.put('%s/merge' % pull_url)
@@ -508,7 +522,7 @@ def main(args):
     
     parser_assign = subparsers.add_parser('assign', help='Assign a PR to a reviewer')
     parser_assign.set_defaults(func=lambda prc, args: prc.do_assign(args))
-    parser_assign.add_argument('pr_number', metavar='pr-number', type=int)
+    parser_assign.add_argument('pr_spec', metavar='pr-spec', nargs='+', help=spec_inline_help())
     parser_assign.add_argument('reviewer', type=str, nargs="?")
     
     parser_list = subparsers.add_parser('list', help='List open PRs in the current origin repo')
@@ -522,7 +536,7 @@ def main(args):
     parser_browse = subparsers.add_parser('browse', 
         help='Open the specified PR in your browser, or the PR list page, if none is specified.')
     parser_browse.set_defaults(func=lambda prc, args: prc.do_browse(args))
-    parser_browse.add_argument('pr_number', metavar='pr-number', type=int, nargs='*', default=None)
+    parser_browse.add_argument('pr_spec', metavar='pr-spec', nargs='*', help=spec_inline_help())
 
     parser_checkout = subparsers.add_parser('checkout', help='Create a local tracking branch for a ' +
                                             'given PR, and check it out.')
@@ -531,7 +545,7 @@ def main(args):
 
     parser_merge = subparsers.add_parser('merge', help="Merge the specified PR, using a merge commit.")
     parser_merge.set_defaults(func=lambda prc, args: prc.do_merge(args))
-    parser_merge.add_argument('pr_number', metavar='pr-number', type=int)
+    parser_merge.add_argument('pr_spec', metavar='pr-spec', nargs='+', help=spec_inline_help())
     parser_merge.add_argument('-d', '--delete-branch', dest='delete', action='store_true',
                               help="Delete the PR branch after successful merge")
 
@@ -547,6 +561,9 @@ def main(args):
     else:
         parser.print_help()
         return -1
+
+def spec_inline_help():
+    return "A PR number, or the GitHub host, org/repo string, and PR number, as three separate arguments."
 
 if __name__ == "__main__":
     tabulate.PRESERVE_WHITESPACE = True
