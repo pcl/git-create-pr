@@ -38,7 +38,7 @@ and put it somewhere in your path.
 
     $ <make changes with $EDITOR>
     $ git commit -m "Add some examples to the docs"
-    $ git pr push fred doc-examples
+    $ git pr push origin doc-examples    # You can push to origin or a fork
     
 ### List all open PRs in the current repository
 
