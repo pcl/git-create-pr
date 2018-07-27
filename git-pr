@@ -37,7 +37,7 @@ exit -2
 ":"""
 # Previous line is bilingual: it ends a comment in Python, and is a no-op in shell
 # Shell commands end here
-# Python script follows (example commands shown)
+# Python script follows
 
 import argparse
 import getpass
