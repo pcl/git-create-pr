@@ -316,12 +316,14 @@ or provide remote and branch names:
         
         def status_from_mergeable_state(node, dirty_text):
             mergeable_state = get_mergeable_state(node['number'])
-            if mergeable_state == "blocked":
+            if mergeable_state == 'behind':
+                return "⨯ out-of-date"
+            elif mergeable_state == "blocked":
                 return "  awaiting review"
-            elif mergeable_state == "dirty":
-                return dirty_text
             elif mergeable_state == "clean":
                 return "✔ ready to merge"
+            elif mergeable_state == "dirty":
+                return dirty_text
             elif mergeable_state == 'unstable':
                 return "⨯ unstable"
             else:
