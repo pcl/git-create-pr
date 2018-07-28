@@ -40,13 +40,17 @@ exit -2
 # Python script follows
 
 import argparse
+from concurrent.futures import *
 import getpass
 import json
 import re
 import requests
 from subprocess import *
+import os
 import sys
 import tabulate
+import time
+import uuid
 
 class PullRequestController:
 
@@ -69,11 +73,15 @@ class PullRequestController:
 
     def configure_for_pr_spec(self, pr_spec):
         if len(pr_spec) == 1:
+            segment.set_property('pr_spec_type', 'relative')
             return (self.configure(), int(pr_spec[0]))
         elif len(pr_spec) == 3 and '/' in pr_spec[1]:
+            segment.set_property('pr_spec_type', 'absolute')
             (self.origin_org, self.origin_repo) = pr_spec[1].split('/')
             return (self.configure_for_host(pr_spec[0]), int(pr_spec[2]))
         else:
+            segment.set_property('pr_spec_type', 'error')
+            segment.set_property('pr_spec_length', len(pr_spec))
             print("pr-spec must be a single PR number or three elements like so: 'github.com pcl/git-pull-request 6'")
             return (-1, None)
 
@@ -190,12 +198,15 @@ Then, add it to your git config:
             print("Created PR %d." % pr_number)
             return 0
         else: # interactive mode, and no reviewer. Ask for details.
-            if self.ask("Created PR %d. Add a reviewer? [Y|n] " % pr_number):
+            if ask("Created PR %d. Add a reviewer? [Y|n] " % pr_number):
                 return self.assign_pr(pr_number, reviewer)
             else:
                 return 0
 
     def do_assign(self, args):
+        segment.track('assign')
+        segment.set_property('has_reviewer', args.reviewer != None)
+        
         config_status, pr_number = self.configure_for_pr_spec(args.pr_spec)
         if config_status != 0:
             return config_status
@@ -235,11 +246,13 @@ Then, add it to your git config:
 
         return 0
     
-    def ask(self, msg):
-        boolean_response = input(msg)
-        return boolean_response == '' or boolean_response == 'y' or boolean_response == 'Y'
-
     def do_push(self, args):
+        segment.track('push')
+        segment.set_property('has_remote', args.remote != None)
+        segment.set_property('has_branch', args.branch != None)
+        segment.set_property('has_reviewer', args.reviewer != None)
+        segment.set_property('force', args.force)
+        
         config_status = self.configure()
         if config_status != 0:
             return config_status
@@ -307,6 +320,10 @@ or provide remote and branch names:
         return [ re.search(pattern, e).group(1) for e in entries if re.match(pattern, e) ]
 
     def do_list(self, args):
+        segment.track('list')
+        segment.set_property('global', args._global)
+        segment.set_property('filter', args.filter) # Restricted to a list of options in the arg parser
+        
         # TODO indicate the PR for the current branch, if any
         config_status = self.configure()
         if config_status != 0:
@@ -317,7 +334,9 @@ or provide remote and branch names:
             # iterate over all the configured servers. This is kinda ugly, since we reset internal
             # state as we iterate. We should move the various 'do_*()' functions (or at least this one)
             # out of prc, and create new prc instances as needed.
-            for host in self.all_hosts():
+            hosts = self.all_hosts()
+            segment.set_property('host_count', len(hosts))
+            for host in hosts:
                 self.configure_for_host(host)
                 response = self.graphq(self.pulls_query("viewer"))
                 pr_count += self.print_list(response['data']['viewer'], True, host, args)
@@ -326,6 +345,8 @@ or provide remote and branch names:
                 self.pulls_query('repository(owner: "%s", name: "%s")' % (self.origin_org, self.origin_repo)))
             pr_count = self.print_list(response['data']['repository'], False, self.host, args)
 
+        segment.set_property('pr_count', pr_count)
+        
         if pr_count > 0:
             print("  To view a PR on the web:                         git pr browse <pr-no>")
             print("  To merge a PR in the 'ready to merge' state:     git pr merge <pr-no>")
@@ -407,6 +428,9 @@ or provide remote and branch names:
         sh('open', url)
         
     def do_browse(self, args):
+        segment.track('browse')
+        segment.set_property('has_pr_spec', args.pr_spec != None)
+
         if args.pr_spec:
             config_status, pr_number = self.configure_for_pr_spec(args.pr_spec)
         else:
@@ -434,6 +458,8 @@ or provide remote and branch names:
             return (owner, pr['head']['repo']['ssh_url'], pr['head']['ref'])
 
     def do_checkout(self, args):
+        segment.track('checkout')
+
         config_status = self.configure()
         if config_status != 0:
             return config_status
@@ -457,6 +483,9 @@ or provide remote and branch names:
         call(['git', 'checkout', '-b', local_branch, '%s/%s' % (repo_name, remote_branch) ])
 
     def do_merge(self, args):
+        segment.track('merge')
+        segment.set_property('delete', args.delete)
+
         config_status, pr_number = self.configure_for_pr_spec(args.pr_spec)
         if config_status != 0:
             return config_status
@@ -471,7 +500,7 @@ or provide remote and branch names:
             print("")
             print("To view the PR: 'git pr browse %d'" % pr_number)
         else:
-            if args.delete or self.interactive and self.ask("Delete PR branch? [Y|n]: "):
+            if args.delete or self.interactive and ask("Delete PR branch? [Y|n]: "):
                 pr_response = self.session.get(pull_url)
                 pr = pr_response.json()
                 if 'head' in pr: # perhaps the branch has already been deleted
@@ -486,6 +515,7 @@ or provide remote and branch names:
 the PR in your browser: 'git pr browse %d'""" % pr_number)
 
     def do_set_token(self, args):
+        segment.track('set-token')
         (host, _, _) = self.parse_remote('origin')
         if args.token == None:
             token = getpass.getpass("Enter token for %s: " % host)
@@ -500,14 +530,17 @@ the PR in your browser: 'git pr browse %d'""" % pr_number)
 
 def sh(*args):
     return str(check_output(args), 'utf-8').strip()
-        
-def main(args):
+
+def new_parser():
     parser = argparse.ArgumentParser(description='Manage GitHub pull requests without leaving your $SHELL')
 
     subparsers = parser.add_subparsers()
 
     parser_help = subparsers.add_parser('help')
-    parser_help.set_defaults(func=lambda prc, args: parser.print_help())
+    def do_help():
+        segment.track('help')
+        parser.print_help()
+    parser_help.set_defaults(func=lambda prc, args: do_help())
 
     parser_push = subparsers.add_parser('push', help='Push a PR. Push HEAD to the specified '
                                           + 'remote and branch, if provided. Otherwise, push to the tracking '
@@ -553,18 +586,128 @@ def main(args):
     parser_set_token.set_defaults(func=lambda prc, args: prc.do_set_token(args))
     parser_set_token.add_argument('token', type=str, nargs='?', default=None)
 
-    args = parser.parse_args()
+    return parser
+    
+def git_pr(args):
+    parser = new_parser()
+    
+    try:
+        args = parser.parse_args()
+    except SystemExit as sysexit:
+        segment.track('command-line-parse-error')
+        return -2
 
     # TODO move all the error logging here, instead of doing inline error prints
     if 'func' in args:
         return args.func(PullRequestController(), args)
     else:
+        segment.track('unknown')
+        # TODO shasum of the first parameter
         parser.print_help()
-        return -1
+        return -3
 
 def spec_inline_help():
     return "A PR number, or the GitHub host, org/repo string, and PR number, as three separate arguments."
 
-if __name__ == "__main__":
+def ask(msg):
+    boolean_response = input(msg)
+    return boolean_response == '' or boolean_response == 'y' or boolean_response == 'Y'
+
+class Segment:
+    app_version = None
+    anonymous_id = None
+    event = 'unknown'
+    properties = { }
+    session = None
+    start = time.time()
+
+    def __init__(self):
+        result = run(['git', 'config', '--get', 'git-pr.anonymous-analytics-id'], stdout=PIPE)
+        if result.returncode != 0:
+            welcome_message = '''Welcome to git-pull-request! Basic usage:
+
+    git pr push        # Push your working branch to a remote and open a PR for it
+    git pr list        # Show your PRs, either in the current repo or globally
+    git pr help        # Detailed usage information
+
+Share anonymous usage stats with the git-pull-request team? [Y|n]: '''
+            
+            if ask(welcome_message):
+                self.anonymous_id = str(uuid.uuid4())
+                sh('git', 'config', '--global', '--add', 'git-pr.anonymous-analytics-id', self.anonymous_id)
+            else:
+                sh('git', 'config', '--global', '--add', 'git-pr.anonymous-analytics-id', 'opted out')
+        else:
+            value = str(result.stdout, 'utf-8').strip()
+            match = re.match('^[0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}$',
+                             value, flags=re.I)
+            if match != None:
+                # Only send metrics if the anonymous id is a UUID. We insert 'opted out' if the user says no.
+                self.anonymous_id = value
+
+        if self.anonymous_id != None:
+            self.session = requests.Session()
+
+    def warmup(self):
+        if self.anonymous_id != None:
+            # Do an OPTIONS call so that the segment connection gets opened up while the PR work happens
+            self.session.options('https://api.segment.io/v1/track')
+    
+    def track(self, event):
+        self.event = event
+
+    def set_property(self, k, v):
+        self.properties[k] = v
+
+    def send(self):
+        if self.anonymous_id != None:
+            if not __file__:
+                app_version = "<script>"
+            else:
+                path = os.path.realpath(__file__)
+                pattern = '.*/Cellar/git-pull-request/(.*)/bin/git-pr'
+                if re.match(pattern, path):
+                    app_version = re.search(pattern, path)[1]
+                else:
+                    app_version = "<unknown>"
+
+            self.properties['duration'] = time.time() - self.start
+            body = json.dumps({
+                'event': self.event,
+                'properties': self.properties,
+                'anonymousId': self.anonymous_id,
+                'context': { 'app': { 'version': app_version } }
+            })
+            
+            self.session.post('https://api.segment.io/v1/track',
+                          headers={
+                              'Authorization': 'Basic R05vU1Q3d3ZRVThpc0duNVpWODhWN0ZZaDgza1ZodFg6',
+                              'Content-Type': 'application/json'
+                          },
+                          data=body)
+
+global segment
+def main(argv):
     tabulate.PRESERVE_WHITESPACE = True
+
+    global segment
+    segment = Segment()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(segment.warmup)
+        exit_code = -10
+        try:
+            exit_code = git_pr(argv)
+            if exit_code == None:
+                exit_code = 0
+        finally:
+            try:
+                future.result() # wait for the initialization call to complete
+                segment.set_property('exit_code', exit_code)
+                segment.send()
+            except Exception as ignored:
+                pass
+        return exit_code
+
+if __name__ == "__main__":
     sys.exit(main(sys.argv))
