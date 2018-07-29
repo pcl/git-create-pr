@@ -32,7 +32,7 @@ done
 
 echo "Couldn't find a Python 3 interpreter!" >&2
 
-exit -2
+exit -3
 
 ":"""
 # Previous line is bilingual: it ends a comment in Python, and is a no-op in shell
@@ -50,7 +50,14 @@ from subprocess import *
 import sys
 import tabulate
 import time
+import urllib3
 import uuid
+
+TIMEOUT=10
+
+GENERIC_ERROR=-1
+ARG_ERROR=-2
+TIMEOUT_ERROR=-4
 
 class PullRequestController:
 
@@ -62,12 +69,12 @@ class PullRequestController:
         (host, self.origin_org, self.origin_repo) = self.parse_remote('origin')
 
         if self.configure_for_host(host) != 0:
-            return -1
+            return GENERIC_ERROR
         
         self.remotes = [r for r in str(check_output(['git', 'remote']), 'utf-8').split('\n') if r != '']
         if len(self.remotes) == 0:
-            print("Coudn't find any remotes. Is this git repo configured yet?")
-            return -1
+            errro("Coudn't find any remotes. Is this git repo configured yet?")
+            return GENERIC_ERROR
 
         return 0
 
@@ -82,20 +89,20 @@ class PullRequestController:
         else:
             segment.set_property('pr_spec_type', 'error')
             segment.set_property('pr_spec_length', len(pr_spec))
-            print("pr-spec must be a single PR number or three elements like so: 'github.com pcl/git-pull-request 6'")
-            return (-1, None)
+            error("pr-spec must be a single PR number or three elements like so: 'github.com pcl/git-pull-request 6'")
+            return (GENERIC_ERROR, None)
 
     def configure_for_host(self, host):
         result = run(['git', 'config', '--get', 'git-pr.%s.token' % host], stdout=PIPE)
         if result.returncode != 0:
-            print('''A GitHub token must be provided. Generate one on GitHub:
+            error('''A GitHub token must be provided. Generate one on GitHub:
     https://%s/settings/tokens/new
 
 The token needs to have the 'repo' scope (or probably some subset of it).
 
 Then, add it to your git config: 
     git-pr set-token <github-token>''' % host)
-            return -1
+            return GENERIC_ERROR
 
         auth_token = str(result.stdout, 'utf-8').strip()
 
@@ -138,7 +145,7 @@ Then, add it to your git config:
 
     def graphq(self, graphql_query):
         json_query = { "query": graphql_query }
-        response = self.session.post(self.graphql_api, data=json.dumps(json_query))
+        response = self.session.post(self.graphql_api, data=json.dumps(json_query), timeout=TIMEOUT)
         if 'errors' in response.json():
             raise Exception(response.content)
         else:
@@ -162,8 +169,8 @@ Then, add it to your git config:
 
         changes_vs_origin = sh('git', 'log', 'origin/master..@', '--format=format:%H').split('\n')
         if len(changes_vs_origin) == 0:
-            print("Local branch contains no changes vs. origin/master!")
-            return -1
+            print("Local branch contains no changes vs. origin/master!")  # stdout or stderr?
+            return GENERIC_ERROR
         else:
             # If there are multiple changes, let's assume the oldest one is the most interesting.
             # TODO: ask the user which change to use if there are more than one.
@@ -173,21 +180,21 @@ Then, add it to your git config:
         body = sh('git', 'show', '-q', change, '--format=format:%b')
 
         try:
-            response = self.session.post(self.pulls_url(), data=json.dumps({ 
+            response = self.session.post(self.pulls_url(), timeout=TIMEOUT, data=json.dumps({ 
                 "title": title, 
                 "body": body,
                 "head": remote_head, 
                 "base": "master" 
             }))
         except Exception as ex:
-            print("PR creation failed! Output: \n%s" % ex)
-            return -1
+            print("PR creation failed! Output: \n%s" % ex)                # stdout or stderr?
+            return GENERIC_ERROR
 
         response_json = response.json()
         if 'number' not in response_json:
-            print("PR creation failed! Output: %s; Errors: \n%s" %
+            print("PR creation failed! Output: %s; Errors: \n%s" %        # stdout or stderr?
                   (response_json['message'], response_json['errors']))
-            return -1
+            return GENERIC_ERROR
         else:
             pr_number = response_json['number']
 
@@ -231,18 +238,19 @@ Then, add it to your git config:
         if reviewer != None:
             try:
                 reviewers_response = self.session.post('%s/requested_reviewers' % self.pull_url(pr_number),
+                                                       timeout=TIMEOUT,
                                                        data='{ "reviewers": [ "%s" ] }' % reviewer)
                 if reviewers_response.status_code >= 300:
-                    print("Unexpected response from PR assignment call! %d. Response payload:\n%s" % (
+                    error("Unexpected response from PR assignment call! %d. Response payload:\n%s" % (
                         reviewers_response.status_code, reviewers_response.content))
-                    return -1
+                    return GENERIC_ERROR
                 else:
                     print("Assigned PR %d to %s" % (pr_number, reviewer))
                     return 0
             except Exception as ex:
-                print("Failed to assign reviewer! Note that reviewers must be repo collaborators.")
-                print(ex)
-                return -1
+                error("Failed to assign reviewer! Note that reviewers must be repo collaborators.")
+                error(ex)
+                return GENERIC_ERROR
 
         return 0
     
@@ -264,10 +272,10 @@ Then, add it to your git config:
                 sh('git', 'push', args.remote, 'HEAD:refs/heads/%s' % args.branch)
             return self.create_pr(args.remote, args.branch, args.reviewer)
         elif args.branch == None:
-            print('''When specifying a remote, you must also provide a remote branch name:
+            error('''When specifying a remote, you must also provide a remote branch name:
 
     git pr push <remote> <branch>''')
-            return -1
+            return GENERIC_ERROR
 
         # A remote and branch wasn't specified. Look around to see if the current HEAD
         # has already been pushed somewhere.
@@ -280,11 +288,11 @@ Then, add it to your git config:
                 # TODO instead of short-circuiting, perhaps look at all remotes and prompt if multiple?
                 return self.create_pr(remote, candidate_branch, args.reviewer)
 
-        print('''The local branch hasn't been pushed to a remote branch. Please push first, 
+        error('''The local branch hasn't been pushed to a remote branch. Please push first, 
 or provide remote and branch names: 
 
     git pr push <remote> <branch>''')
-        return -1
+        return GENERIC_ERROR
 
     def pulls_query(self, field):
         # TODO first or last? Sort order? Paginate, or at least indicate incompleteness!
@@ -381,7 +389,8 @@ or provide remote and branch names:
 
         def get_mergeable_state(node):
             response = self.session.get("%s/repos/%s/pulls/%d" %
-                                        (self.rest_api(host), node['repository']['nameWithOwner'], node['number']))
+                                        (self.rest_api(host), node['repository']['nameWithOwner'],
+                                         node['number']), timeout=TIMEOUT)
             return response.json()['mergeable_state']
         
         def status_from_mergeable_state(node, dirty_text):
@@ -449,7 +458,7 @@ or provide remote and branch names:
             open_subpath('pulls')
     
     def fetch_checkout_branch_spec(self, pr_number):
-        response = self.session.get(self.pull_url(pr_number))
+        response = self.session.get(self.pull_url(pr_number), timeout=TIMEOUT)
         pr = response.json()
         if 'head' not in pr: # the branch has been deleted
             return None
@@ -470,8 +479,8 @@ or provide remote and branch names:
         # strip the first two chars since we can't rely on 'git branch --format'
         branches = [x[2:] for x in sh('git', 'branch').split('\n')]
         if local_branch in branches:
-            print("You already have a local branch called %s!" % local_branch)
-            return -1
+            error("You already have a local branch called %s!" % local_branch)
+            return GENERIC_ERROR
         
         (repo_name, repo_url, remote_branch) = self.fetch_checkout_branch_spec(pr_number)
 
@@ -491,7 +500,7 @@ or provide remote and branch names:
             return config_status
 
         pull_url = self.pull_url(pr_number)
-        merge_response = self.session.put('%s/merge' % pull_url)
+        merge_response = self.session.put('%s/merge' % pull_url, timeout=TIMEOUT)
         merge_result = merge_response.json()
         print(merge_result['message'])
         if merge_response.status_code > 299:
@@ -501,17 +510,17 @@ or provide remote and branch names:
             print("To view the PR: 'git pr browse %d'" % pr_number)
         else:
             if args.delete or self.interactive and ask("Delete PR branch? [Y|n]: "):
-                pr_response = self.session.get(pull_url)
+                pr_response = self.session.get(pull_url, timeout=TIMEOUT)
                 pr = pr_response.json()
                 if 'head' in pr: # perhaps the branch has already been deleted
                     branchname = pr['head']['ref']
                     repo_url = pr['head']['repo']['url']
-                    self.session.delete("%s/git/refs/heads/%s" % (repo_url, branchname))
+                    self.session.delete("%s/git/refs/heads/%s" % (repo_url, branchname), timeout=TIMEOUT)
                     sh('git', 'fetch', 'origin')
                     sh('git', 'remote', 'prune', 'origin')
                     # TODO fetch and prune the user's fork, too
                 else:
-                    print("""Error: didn't find the expected data in the PR output! To delete this PR, open
+                    error("""Error: didn't find the expected data in the PR output! To delete this PR, open
 the PR in your browser: 'git pr browse %d'""" % pr_number)
 
     def do_set_token(self, args):
@@ -520,8 +529,8 @@ the PR in your browser: 'git pr browse %d'""" % pr_number)
         if args.token == None:
             token = getpass.getpass("Enter token for %s: " % host)
             if token == None:
-                print("Error: no token provided!")
-                return -1
+                error("Error: no token provided!")
+                return GENERIC_ERROR
         else:
             token = args.token
 
@@ -595,7 +604,7 @@ def git_pr(args):
         args = parser.parse_args()
     except SystemExit as sysexit:
         segment.track('command-line-parse-error')
-        return -2
+        return ARG_ERROR
 
     # TODO move all the error logging here, instead of doing inline error prints
     if 'func' in args:
@@ -604,7 +613,7 @@ def git_pr(args):
         segment.track('unknown')
         # TODO shasum of the first parameter
         parser.print_help()
-        return -3
+        return ARG_ERROR
 
 def spec_inline_help():
     return "A PR number, or the GitHub host, org/repo string, and PR number, as three separate arguments."
@@ -612,6 +621,9 @@ def spec_inline_help():
 def ask(msg):
     boolean_response = input(msg)
     return boolean_response == '' or boolean_response == 'y' or boolean_response == 'Y'
+
+def error(msg):
+    print(msg, file=sys.stderr)
 
 class Segment:
     app_version = None
@@ -651,7 +663,7 @@ Share anonymous usage stats with the git-pull-request team? [Y|n]: '''
     def warmup(self):
         if self.anonymous_id != None:
             # Do an OPTIONS call so that the segment connection gets opened up while the PR work happens
-            self.session.options('https://api.segment.io/v1/track')
+            self.session.options('https://api.segment.io/v1/track', timeout=TIMEOUT)
     
     def track(self, event):
         self.event = event
@@ -680,11 +692,12 @@ Share anonymous usage stats with the git-pull-request team? [Y|n]: '''
             })
             
             self.session.post('https://api.segment.io/v1/track',
-                          headers={
-                              'Authorization': 'Basic R05vU1Q3d3ZRVThpc0duNVpWODhWN0ZZaDgza1ZodFg6',
-                              'Content-Type': 'application/json'
-                          },
-                          data=body)
+                              headers={
+                                  'Authorization': 'Basic R05vU1Q3d3ZRVThpc0duNVpWODhWN0ZZaDgza1ZodFg6',
+                                  'Content-Type': 'application/json'
+                              },
+                              timeout=TIMEOUT,
+                              data=body)
 
 global segment
 def main(argv):
@@ -702,6 +715,17 @@ def main(argv):
                 exit_code = 0
         except KeyboardInterrupt as ki:
             exit_code = 130
+        except requests.ConnectTimeout as ct:
+            retry = ct.args[0]
+            if type(retry) is urllib3.exceptions.MaxRetryError:
+                timeout = retry.reason
+                if type(timeout) is urllib3.exceptions.ConnectTimeoutError:
+                    error(timeout.args[1])
+                else:
+                    error(timeout)
+            else:
+                    error(retry)
+            exit_code = TIMEOUT_ERROR
         finally:
             try:
                 future.result() # wait for the initialization call to complete
