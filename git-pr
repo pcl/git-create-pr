@@ -45,8 +45,8 @@ import getpass
 import json
 import re
 import requests
-from subprocess import *
 import os
+from subprocess import *
 import sys
 import tabulate
 import time
@@ -700,14 +700,17 @@ def main(argv):
             exit_code = git_pr(argv)
             if exit_code == None:
                 exit_code = 0
+        except KeyboardInterrupt as ki:
+            exit_code = 130
         finally:
             try:
                 future.result() # wait for the initialization call to complete
                 segment.set_property('exit_code', exit_code)
                 segment.send()
-            except Exception as ignored:
+            except:
                 pass
         return exit_code
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))
+        
