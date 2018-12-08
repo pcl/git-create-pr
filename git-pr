@@ -10,7 +10,7 @@
 # First, check if we're running in a packaged context
 executable="$(dirname $0)/$(ls -l "$0" | sed 's/.* -> //')"
 dir="$(dirname "$executable")"
-if [ -f "$dir/../libexec/pip-selfcheck.json" ]; then
+if [ -f "$dir/../libexec/bin/activate" ]; then
     source "$dir/../libexec/bin/activate"
     exec python3 $0 "$@"
 fi
